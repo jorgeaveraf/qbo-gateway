@@ -1,0 +1,60 @@
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.egg-info/
+*.dist-info/
+*.egg
+build/
+dist/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs & runtime data
+*.log
+logs/
+log/
+tmp/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+pgdata/
+
+# IDE & OS metadata
+.idea/
+.vscode/
+*.code-workspace
+*.suo
+*.user
+*.swp
+*.swn
+*.bak
+.DS_Store
+Thumbs.db

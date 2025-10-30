@@ -1,0 +1,164 @@
+{
+  "info": {
+    "_postman_id": "b2e9b8de-2ad5-4e0a-94d4-0e8a6401f9cb",
+    "name": "QBO Gateway",
+    "description": "Colección Postman para interactuar con el microservicio QBO Gateway (OAuth, CRUD de clientes y proxy companyinfo). Actualiza las variables en la pestaña de colección antes de ejecutar.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Auth - Connect",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/auth/connect?client_id={{client_id}}&env={{environment}}"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Abre la URL en el navegador para completar el flujo OAuth"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Clients",
+      "item": [
+        {
+          "name": "Clients - Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ACME\",\n  \"status\": \"active\",\n  \"metadata\": {\n    \"tier\": \"sandbox\"\n  }\n}"
+            },
+            "url": "{{base_url}}/clients"
+          },
+          "response": []
+        },
+        {
+          "name": "Clients - List",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/clients"
+          },
+          "response": []
+        },
+        {
+          "name": "Clients - Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/clients/{{client_id}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Clients - Credentials",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/clients/{{client_id}}/credentials?environment={{environment}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Clients - Rotate Credentials",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/clients/{{client_id}}/credentials/rotate?environment={{environment}}"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "QBO Proxy",
+      "item": [
+        {
+          "name": "QBO - CompanyInfo",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/companyinfo?environment={{environment}}"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "api_key",
+      "value": "super-secret-api-key"
+    },
+    {
+      "key": "client_id",
+      "value": ""
+    },
+    {
+      "key": "environment",
+      "value": "sandbox"
+    }
+  ]
+}
