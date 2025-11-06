@@ -46,7 +46,7 @@ async def register_idempotency_key(
         return existing, True
 
     record = IdempotencyKeys(
-        client_id=client_id,
+        client_id=None,
         key=key,
         resource_type=resource_type,
         request_hash=hashed_payload,

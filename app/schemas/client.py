@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 ClientStatus = Literal["active", "inactive"]
@@ -14,7 +14,10 @@ Environment = Literal["sandbox", "prod"]
 class ClientBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     status: ClientStatus = "active"
-    metadata: Optional[dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("metadata_json", "metadata"),
+    )
 
 
 class ClientCreate(ClientBase):

@@ -146,10 +146,10 @@ class IdempotencyKeys(Base):
         Index("ix_idempotency_keys_client_id", "client_id"),
     )
 
-    client_id: Mapped[uuid.UUID] = mapped_column(
+    client_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(),
         ForeignKey("clients.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     key: Mapped[str] = mapped_column(String(255), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(64), nullable=False)

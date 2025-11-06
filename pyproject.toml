@@ -35,6 +35,10 @@ dev = [
 [project.scripts]
 qbo-gateway = "app.main:run"
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests", "postman", "postman.*", "alembic", "alembic.*"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
