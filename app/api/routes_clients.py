@@ -4,6 +4,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -62,7 +63,8 @@ async def create_client(
     client = await repo.create_client(session, payload)
     logging_utils.set_request_context(client_id=str(client.id))
     record.client_id = client.id
-    response_body = ClientRead.model_validate(client).model_dump()
+    response_model = ClientRead.model_validate(client)
+    response_body = jsonable_encoder(response_model)
     await store_idempotent_response(session, record, response_body)
     await session.commit()
 
@@ -70,7 +72,7 @@ async def create_client(
         "client_created",
         extra={"client_id": str(client.id), "status": client.status},
     )
-    return ClientRead.model_validate(response_body)
+    return response_model
 
 
 @router.get("", response_model=list[ClientRead])

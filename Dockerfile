@@ -31,6 +31,10 @@ ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     PATH="/home/appuser/.local/bin:${PATH}"
 
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd -m appuser
 
 WORKDIR /app

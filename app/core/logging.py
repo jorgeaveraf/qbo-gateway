@@ -5,7 +5,7 @@ import logging.config
 from contextvars import ContextVar
 from typing import Optional
 
-from python_json_logger import jsonlogger
+from pythonjsonlogger import jsonlogger
 
 
 request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
