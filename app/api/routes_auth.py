@@ -19,6 +19,7 @@ from app.utils.validators import parse_uuid, resolve_environment
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+public_router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger("app.api.auth")
 
 
@@ -56,7 +57,7 @@ async def connect_oauth(
     return RedirectResponse(auth_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
-@router.get("/callback")
+@public_router.get("/callback")
 async def oauth_callback(
     code: Optional[str] = Query(default=None),
     state: Optional[str] = Query(default=None),
