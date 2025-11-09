@@ -157,6 +157,7 @@ def create_app() -> FastAPI:
     protected_router.include_router(routes_clients.router)
     protected_router.include_router(routes_qbo.router)
     app.include_router(protected_router)
+    app.include_router(routes_auth.public_router)
 
     @app.get("/health", include_in_schema=False)
     async def health() -> dict[str, str]:
