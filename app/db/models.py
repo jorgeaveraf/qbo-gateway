@@ -104,6 +104,12 @@ class ClientCredentials(Base):
         UniqueConstraint("realm_id", "environment", name="uq_realm_environment"),
         Index("ix_client_credentials_client_id", "client_id"),
         Index("ix_client_credentials_realm_id", "realm_id"),
+        Index(
+            "ix_client_credentials_client_env_access_exp",
+            "client_id",
+            "environment",
+            "access_expires_at",
+        ),
     )
 
     client_id: Mapped[uuid.UUID] = mapped_column(

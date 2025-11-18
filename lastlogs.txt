@@ -1,0 +1,14 @@
+{"asctime": "2025-11-12 03:47:29,821", "levelname": "INFO", "name": "app.request", "message": "request_completed", "method": "GET", "path": "/health", "status": 200, "duration_ms": 0.27, "request_id": "69bcc870-3a6e-4c0a-b622-bbfabae0f9dc", "client_id": null, "realm_id": null}
+INFO:     127.0.0.1:52392 - "GET /health HTTP/1.1" 200 OK
+{"asctime": "2025-11-12 03:47:59,880", "levelname": "INFO", "name": "app.request", "message": "request_completed", "method": "GET", "path": "/health", "status": 200, "duration_ms": 0.29, "request_id": "bd416a06-f3c2-4211-a511-0fab6d26ac97", "client_id": null, "realm_id": null}
+INFO:     127.0.0.1:47734 - "GET /health HTTP/1.1" 200 OK
+{"asctime": "2025-11-12 03:48:20,326", "levelname": "INFO", "name": "app.request", "message": "request_completed", "method": "GET", "path": "/clients", "status": 200, "duration_ms": 5.57, "request_id": "53f6cd9d-e4ec-41a7-bcda-5d3fad74ad5e", "client_id": null, "realm_id": null}
+INFO:     172.21.0.1:45928 - "GET /clients HTTP/1.1" 200 OK
+{"asctime": "2025-11-12 03:48:28,639", "levelname": "INFO", "name": "httpx", "message": "HTTP Request: POST https://sandbox-quickbooks.api.intuit.com/v3/company/9341455571857172/query?minorversion=65 \"HTTP/1.1 400 Bad Request\"", "request_id": "12f57dd2-bcdc-462c-b65b-7f91638afd69", "client_id": "477751f2-1142-4283-a3c0-387f8aa45fbd", "realm_id": "9341455571857172"}
+{"asctime": "2025-11-12 03:48:28,639", "levelname": "ERROR", "name": "app.api.qbo", "message": "qbo_query_error", "client_id": "477751f2-1142-4283-a3c0-387f8aa45fbd", "realm_id": "9341455571857172", "entity": "customers", "request_id": "12f57dd2-bcdc-462c-b65b-7f91638afd69"}
+{"asctime": "2025-11-12 03:48:28,640", "levelname": "INFO", "name": "app.request", "message": "request_completed", "method": "GET", "path": "/qbo/477751f2-1142-4283-a3c0-387f8aa45fbd/customers", "status": 502, "duration_ms": 623.52, "request_id": "12f57dd2-bcdc-462c-b65b-7f91638afd69", "client_id": null, "realm_id": null}
+INFO:     172.21.0.1:45942 - "GET /qbo/477751f2-1142-4283-a3c0-387f8aa45fbd/customers?environment=sandbox&status=active&maxresults=10 HTTP/1.1" 502 Bad Gateway
+{"asctime": "2025-11-12 03:48:29,945", "levelname": "INFO", "name": "app.request", "message": "request_completed", "method": "GET", "path": "/health", "status": 200, "duration_ms": 0.28, "request_id": "c629b38b-788d-469c-8b5a-127f4b01d72c", "client_id": null, "realm_id": null}
+INFO:     127.0.0.1:35114 - "GET /health HTTP/1.1" 200 OK
+{"asctime": "2025-11-12 03:49:00,033", "levelname": "INFO", "name": "app.request", "message": "request_completed", "method": "GET", "path": "/health", "status": 200, "duration_ms": 0.6, "request_id": "a98a17df-f36a-4d54-a0ad-a8b78d4bfdbd", "client_id": null, "realm_id": null}
+INFO:     127.0.0.1:43966 - "GET /health HTTP/1.1" 200 OK
