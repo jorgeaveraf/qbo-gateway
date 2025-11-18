@@ -9,6 +9,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 ClientStatus = Literal["active", "inactive"]
 Environment = Literal["sandbox", "prod"]
+AccessStatus = Literal["valid", "expired", "none"]
 
 
 class ClientBase(BaseModel):
@@ -56,6 +57,21 @@ class CredentialSummary(BaseModel):
 
 class ClientWithCredentials(ClientRead):
     credentials: list[CredentialSummary] = []
+
+
+class ClientListItemSummary(ClientRead):
+    has_credentials: bool
+    environments: list[str] = Field(
+        default_factory=list,
+        description="Environments with stored credentials (deduplicated and sorted).",
+    )
+    access_status: AccessStatus = Field(
+        description="Overall access token health based on latest expiration.",
+    )
+    access_expires_at: Optional[datetime] = Field(
+        default=None,
+        description="Latest access token expiration considered in the summary.",
+    )
 
 
 class CredentialRotateResponse(BaseModel):

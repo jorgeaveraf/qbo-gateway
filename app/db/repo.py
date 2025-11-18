@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Iterable, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ClientCredentials, Clients, IdempotencyKeys
 from app.schemas.client import ClientCreate, ClientUpdate, Environment
+
+
+@dataclass
+class ClientSummaryAggregate:
+    client: Clients
+    credentials_count: int
+    environments: list[str]
+    access_expires_at: datetime | None
 
 
 async def create_client(session: AsyncSession, payload: ClientCreate) -> Clients:
@@ -158,3 +168,54 @@ async def delete_idempotency_records_for_client(
         delete(IdempotencyKeys).where(IdempotencyKeys.client_id == client_id)
     )
     await session.flush()
+
+
+async def list_clients_with_summary(
+    session: AsyncSession,
+    *,
+    environment: Optional[Environment] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> list[ClientSummaryAggregate]:
+    aggregates = (
+        select(
+            ClientCredentials.client_id.label("client_id"),
+            func.count(ClientCredentials.id).label("credentials_count"),
+            func.max(ClientCredentials.access_expires_at).label("max_access_expires_at"),
+            func.array_agg(func.distinct(ClientCredentials.environment)).label("environments"),
+        )
+        .group_by(ClientCredentials.client_id)
+    )
+    if environment:
+        aggregates = aggregates.where(ClientCredentials.environment == environment)
+    aggregates = aggregates.subquery()
+
+    stmt = (
+        select(
+            Clients,
+            aggregates.c.credentials_count,
+            aggregates.c.environments,
+            aggregates.c.max_access_expires_at,
+        )
+        .outerjoin(aggregates, Clients.id == aggregates.c.client_id)
+        .order_by(Clients.updated_at.desc(), Clients.created_at.desc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    if offset is not None:
+        stmt = stmt.offset(offset)
+
+    result = await session.execute(stmt)
+    rows = result.all()
+    payload: list[ClientSummaryAggregate] = []
+    for client, credentials_count, environments, max_expiration in rows:
+        env_list = sorted(environments) if environments else []
+        payload.append(
+            ClientSummaryAggregate(
+                client=client,
+                credentials_count=int(credentials_count or 0),
+                environments=env_list,
+                access_expires_at=max_expiration,
+            )
+        )
+    return payload

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Tuple
 
 from fastapi import HTTPException, status
@@ -20,12 +21,17 @@ async def register_idempotency_key(
     key: str,
     request_payload: Any,
     resource_type: str,
+    fingerprint: str | None = None,
 ) -> Tuple[IdempotencyKeys, bool]:
-    serialized_payload = json.dumps(
-        request_payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
+    serialized_payload = (
+        fingerprint
+        if fingerprint is not None
+        else json.dumps(
+            request_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
     )
     hashed_payload = sha256_hex(serialized_payload)
     result = await session.execute(
@@ -82,3 +88,19 @@ async def store_idempotent_response(
 ) -> None:
     record.response_body = response_body
     await session.flush()
+
+
+def _normalize_amount(value: Decimal) -> str:
+    return str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def build_fingerprint(*parts: Any) -> str:
+    normalized: list[str] = []
+    for part in parts:
+        if isinstance(part, Decimal):
+            normalized.append(_normalize_amount(part))
+        elif part is None:
+            normalized.append("")
+        else:
+            normalized.append(str(part))
+    return "|".join(normalized)

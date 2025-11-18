@@ -1,0 +1,472 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Any, Dict, Optional
+
+from fastapi import HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import ClientCredentials
+from app.services.qbo_client import QuickBooksApiError, QuickBooksOAuthError, QuickBooksService
+
+
+class QBOReferenceResolver:
+    def __init__(
+        self,
+        qbo_service: QuickBooksService,
+        session: AsyncSession,
+        credential: ClientCredentials,
+    ) -> None:
+        self.qbo_service = qbo_service
+        self.session = session
+        self.credential = credential
+        self._cache: dict[str, Dict[str, dict[str, str]]] = defaultdict(dict)
+        self._records: dict[str, Dict[str, dict[str, Any]]] = defaultdict(dict)
+
+    async def resolve_customer(self, identifier: str, *, auto_create: bool = False) -> dict[str, str]:
+        reference, _ = await self._resolve_entity(
+            "Customer",
+            identifier,
+            name_field="DisplayName",
+            case_insensitive=False,
+        )
+        if reference:
+            return reference
+        if auto_create:
+            payload = {"DisplayName": identifier}
+            data, _, _ = await self.qbo_service.post(
+                self.session,
+                self.credential,
+                entity="Customer",
+                resource="customer",
+                payload=payload,
+            )
+            created = self._extract_entity(data, "Customer")
+            if created is None:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Unable to auto-create customer in QuickBooks",
+                )
+            reference = self._build_reference(created)
+            self._store_cache("Customer", identifier, reference, created)
+            return reference
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Customer '{identifier}' not found",
+        )
+
+    async def resolve_vendor(self, identifier: str, *, auto_create: bool = False) -> dict[str, str]:
+        reference, _ = await self._resolve_entity(
+            "Vendor",
+            identifier,
+            name_field="DisplayName",
+            case_insensitive=False,
+        )
+        if reference:
+            return reference
+        if auto_create:
+            payload = {"DisplayName": identifier}
+            data, _, _ = await self.qbo_service.post(
+                self.session,
+                self.credential,
+                entity="Vendor",
+                resource="vendor",
+                payload=payload,
+            )
+            created = self._extract_entity(data, "Vendor")
+            if created is None:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Unable to auto-create vendor in QuickBooks",
+                )
+            reference = self._build_reference(created)
+            self._store_cache("Vendor", identifier, reference, created)
+            return reference
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vendor '{identifier}' not found",
+        )
+
+    async def resolve_account(
+        self,
+        identifier: str,
+        *,
+        account_type: Optional[str] = None,
+    ) -> dict[str, str]:
+        filters: list[str] = []
+        if account_type:
+            filters.append(f"AccountType = '{self._escape(account_type)}'")
+        reference, _ = await self._resolve_entity(
+            "Account",
+            identifier,
+            name_field="Name",
+            extra_filters=filters,
+            case_insensitive=False,
+        )
+        if reference:
+            return reference
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Account '{identifier}' not found",
+        )
+
+    async def resolve_entity(self, name: str, entity_type: str) -> dict[str, str]:
+        mapping = {
+            "Customer": ("Customer", "DisplayName"),
+            "Vendor": ("Vendor", "DisplayName"),
+            "Employee": ("Employee", "DisplayName"),
+            "Other": ("OtherName", "DisplayName"),
+        }
+        qbo_entity, name_field = mapping.get(entity_type, (None, None))
+        if qbo_entity is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid entity_type",
+            )
+        record = await self._resolve_record(
+            qbo_entity,
+            name,
+            name_field=name_field,
+            allow_numeric_name_match=True,
+            case_insensitive=False,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown {entity_type}: {name}",
+            )
+        reference: dict[str, str] = {
+            "type": entity_type,
+            "value": str(record.get("Id")),
+        }
+        display_name = record.get("DisplayName") or record.get(name_field)
+        if display_name:
+            reference["name"] = str(display_name)
+        self._store_cache(qbo_entity, name, {"value": reference["value"], "name": reference.get("name", "")}, record)
+        return reference
+
+    async def get_account(self, account_ref: str | int) -> tuple[dict[str, Any], bool, float]:
+        identifier = str(account_ref).strip()
+        cache_key = self._build_cache_key(identifier)
+        if cache_key in self._records["Account"]:
+            return self._records["Account"][cache_key], False, 0.0
+
+        refreshed = False
+        latency_ms = 0.0
+        record: Optional[dict[str, Any]] = None
+
+        if identifier.isdigit():
+            payload, refreshed, latency_ms = await self.qbo_service.get_account_by_id(
+                self.session, self.credential, account_id=identifier
+            )
+            record = self._extract_entity(payload, "Account")
+
+        if record is None:
+            record, refreshed, latency_ms = await self._resolve_record(
+                "Account",
+                identifier,
+                name_field="FullyQualifiedName",
+                allow_numeric_name_match=True,
+                with_metadata=True,
+                case_insensitive=False,
+            )
+
+        if record is None:
+            record, refreshed, latency_ms = await self._resolve_record(
+                "Account",
+                identifier,
+                name_field="Name",
+                allow_numeric_name_match=True,
+                with_metadata=True,
+                case_insensitive=False,
+            )
+
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Account '{identifier}' not found",
+            )
+
+        reference = self._build_reference(record, name_field="Name")
+        self._store_cache("Account", identifier, reference, record)
+        return record, refreshed, latency_ms
+
+    async def resolve_item(self, identifier: str) -> dict[str, str]:
+        # Avoid UPPER() in queries (QBO rejects it for Item); match using FullyQualifiedName case-sensitively.
+        reference, _ = await self._resolve_entity(
+            "Item",
+            identifier,
+            name_field="FullyQualifiedName",
+            case_insensitive=False,
+        )
+        if reference:
+            return reference
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Item '{identifier}' not found",
+        )
+
+    async def resolve_class(self, identifier: str) -> dict[str, str]:
+        # QuickBooks rejects queries with UPPER() for Class, so force case-sensitive lookup
+        # to avoid `QueryParserError` and still match fully qualified names.
+        reference, _ = await self._resolve_entity(
+            "Class",
+            identifier,
+            name_field="FullyQualifiedName",
+            case_insensitive=False,
+        )
+        if reference:
+            return reference
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Class '{identifier}' not found",
+        )
+
+    async def resolve_account_payload(self, identifier: str) -> dict[str, Any]:
+        record, _, _ = await self.get_account(identifier)
+        return record
+
+    async def resolve_invoice_txn(self, identifier: str) -> dict[str, str]:
+        record = await self._resolve_record(
+            "Invoice",
+            identifier,
+            name_field="DocNumber",
+            allow_numeric_name_match=True,
+            case_insensitive=False,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Invoice '{identifier}' not found",
+            )
+        return {
+            "value": str(record.get("Id")),
+            "doc_number": str(record.get("DocNumber") or record.get("Id")),
+        }
+
+    async def resolve_bill_txn(self, identifier: str) -> dict[str, str]:
+        record = await self._resolve_record(
+            "Bill",
+            identifier,
+            name_field="DocNumber",
+            allow_numeric_name_match=True,
+            case_insensitive=False,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Bill '{identifier}' not found",
+            )
+        return {
+            "value": str(record.get("Id")),
+            "doc_number": str(record.get("DocNumber") or record.get("Id")),
+        }
+
+    async def resolve_item_income_account(self, identifier: str) -> dict[str, str]:
+        record = await self._resolve_record("Item", identifier, name_field="Name")
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Item '{identifier}' not found",
+            )
+        account_ref = record.get("IncomeAccountRef")
+        if not account_ref:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Item '{identifier}' is missing an income account",
+            )
+        return account_ref
+
+    async def _resolve_entity(
+        self,
+        entity: str,
+        identifier: str,
+        *,
+        name_field: str,
+        extra_filters: Optional[list[str]] = None,
+        case_insensitive: bool = True,
+    ) -> tuple[Optional[dict[str, str]], Optional[dict[str, Any]]]:
+        cache_key = self._build_cache_key(identifier)
+        if cache_key in self._cache[entity]:
+            return self._cache[entity][cache_key], self._records[entity].get(cache_key)
+
+        record = await self._resolve_record(
+            entity,
+            identifier,
+            name_field=name_field,
+            extra_filters=extra_filters,
+            case_insensitive=case_insensitive,
+        )
+        if record is None:
+            return None, None
+        reference = self._build_reference(record, name_field=name_field)
+        self._store_cache(entity, identifier, reference, record)
+        return reference, record
+
+    async def _resolve_record(
+        self,
+        entity: str,
+        identifier: str,
+        *,
+        name_field: str,
+        extra_filters: Optional[list[str]] = None,
+        allow_numeric_name_match: bool = False,
+        with_metadata: bool = False,
+        case_insensitive: bool = True,
+    ) -> Optional[dict[str, Any]] | tuple[Optional[dict[str, Any]], bool, float]:
+        cache_key = self._build_cache_key(identifier)
+        if cache_key in self._records[entity]:
+            cached = self._records[entity][cache_key]
+            return (cached, False, 0.0) if with_metadata else cached
+
+        normalized = identifier.strip()
+        filters = list(extra_filters or [])
+
+        # When numeric identifiers are allowed to match either Id or DocNumber, try Id first,
+        # then fall back to name_field to avoid OR clauses that QuickBooks rejects.
+        if normalized.isdigit() and allow_numeric_name_match:
+            escaped = self._escape(normalized)
+            candidate_filters = [f"Id = '{escaped}'"]
+            if case_insensitive:
+                candidate_filters.append(f"UPPER({name_field}) = '{escaped.upper()}'")
+            else:
+                candidate_filters.append(f"{name_field} = '{escaped}'")
+            for clause in candidate_filters:
+                where_clause = " AND ".join(filters + [clause])
+                query = f"select * from {entity} where {where_clause}"
+                try:
+                    data, refreshed, latency_ms = await self.qbo_service.query(
+                        self.session,
+                        self.credential,
+                        entity=entity,
+                        select_sql=query,
+                        startposition=1,
+                        maxresults=1,
+                    )
+                except QuickBooksOAuthError:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="QuickBooks credentials are invalid or expired",
+                    )
+                except QuickBooksApiError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="QuickBooks API error",
+                    ) from exc
+                record = self._extract_entity(data, entity)
+                if record is not None:
+                    self._records[entity][cache_key] = record
+                    return (record, refreshed, latency_ms) if with_metadata else record
+            return (None, False, 0.0) if with_metadata else None
+
+        where_clause = self._build_where_clause(
+            identifier,
+            name_field,
+            filters,
+            allow_numeric_name_match=allow_numeric_name_match,
+            case_insensitive=case_insensitive,
+        )
+        query = f"select * from {entity} where {where_clause}"
+        try:
+            data, refreshed, latency_ms = await self.qbo_service.query(
+                self.session,
+                self.credential,
+                entity=entity,
+                select_sql=query,
+                startposition=1,
+                maxresults=1,
+            )
+        except QuickBooksOAuthError:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="QuickBooks credentials are invalid or expired",
+            )
+        except QuickBooksApiError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="QuickBooks API error",
+            ) from exc
+        record = self._extract_entity(data, entity)
+        if record is not None:
+            self._records[entity][cache_key] = record
+        if with_metadata:
+            return record, refreshed, latency_ms
+        return record
+
+    def _build_where_clause(
+        self,
+        identifier: str,
+        name_field: str,
+        extra_filters: Optional[list[str]],
+        *,
+        allow_numeric_name_match: bool = False,
+        case_insensitive: bool = True,
+    ) -> str:
+        normalized = identifier.strip()
+        filters = list(extra_filters or [])
+        if normalized.isdigit():
+            escaped = self._escape(normalized)
+            clauses = [f"Id = '{escaped}'"]
+            if allow_numeric_name_match:
+                if case_insensitive:
+                    clauses.append(f"UPPER({name_field}) = '{escaped.upper()}'")
+                else:
+                    clauses.append(f"{name_field} = '{escaped}'")
+            filters.append(" OR ".join(clauses))
+        else:
+            if case_insensitive:
+                filters.append(f"UPPER({name_field}) = '{self._escape(normalized.upper())}'")
+            else:
+                filters.append(f"{name_field} = '{self._escape(normalized)}'")
+        return " AND ".join(filters)
+
+    def _extract_entity(self, payload: dict[str, Any], entity: str) -> Optional[dict[str, Any]]:
+        query_response = payload.get("QueryResponse")
+        if query_response is None:
+            return payload.get(entity)
+        items = query_response.get(entity)
+        if not items:
+            return None
+        if isinstance(items, list):
+            return items[0]
+        return items
+
+    def _build_reference(self, entity_payload: dict[str, Any], name_field: str | None = None) -> dict[str, str]:
+        value = entity_payload.get("Id")
+        if value is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Malformed QuickBooks entity payload",
+            )
+        name = (
+            entity_payload.get("DisplayName")
+            if "DisplayName" in entity_payload
+            else entity_payload.get("Name")
+        )
+        if name_field:
+            name = entity_payload.get(name_field) or name
+        reference: dict[str, str] = {"value": str(value)}
+        if name:
+            reference["name"] = str(name)
+        return reference
+
+    def _store_cache(
+        self,
+        entity: str,
+        identifier: str,
+        reference: dict[str, str],
+        record: Optional[dict[str, Any]] = None,
+    ) -> None:
+        cache_key = self._build_cache_key(identifier)
+        self._cache[entity][cache_key] = reference
+        if record is not None:
+            self._records[entity][cache_key] = record
+
+    def _build_cache_key(self, identifier: str) -> str:
+        normalized = identifier.strip()
+        if normalized.isdigit():
+            return f"id:{normalized}"
+        return f"name:{normalized.lower()}"
+
+    def _escape(self, value: str) -> str:
+        return value.replace("'", "''")
