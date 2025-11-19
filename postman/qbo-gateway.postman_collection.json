@@ -35,6 +35,24 @@
           ]
         },
         {
+          "name": "Auth - Connect (JSON Mode)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/auth/connect?client_id={{client_id}}&env={{environment}}"
+          },
+          "response": []
+        },
+        {
           "name": "Auth - Callback",
           "request": {
             "method": "GET",
