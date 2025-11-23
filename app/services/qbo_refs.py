@@ -110,6 +110,25 @@ class QBOReferenceResolver:
             detail=f"Account '{identifier}' not found",
         )
 
+    async def ensure_account(
+        self,
+        identifier: str,
+        *,
+        account_type: Optional[str] = None,
+        account_sub_type: Optional[str] = None,
+        auto_create: bool = False,
+    ) -> dict[str, str]:
+        try:
+            return await self.resolve_account(identifier, account_type=account_type)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_404_NOT_FOUND or not auto_create:
+                raise
+        return await self._create_account(
+            identifier,
+            account_type=account_type,
+            account_sub_type=account_sub_type,
+        )
+
     async def resolve_entity(self, name: str, entity_type: str) -> dict[str, str]:
         mapping = {
             "Customer": ("Customer", "DisplayName"),
@@ -144,6 +163,21 @@ class QBOReferenceResolver:
             reference["name"] = str(display_name)
         self._store_cache(qbo_entity, name, {"value": reference["value"], "name": reference.get("name", "")}, record)
         return reference
+
+    async def resolve_entity_with_auto_create(
+        self,
+        name: str,
+        entity_type: str,
+        *,
+        auto_create: bool = False,
+    ) -> dict[str, str]:
+        if entity_type == "Customer":
+            reference = await self.resolve_customer(name, auto_create=auto_create)
+            return {"type": entity_type, **reference}
+        if entity_type == "Vendor":
+            reference = await self.resolve_vendor(name, auto_create=auto_create)
+            return {"type": entity_type, **reference}
+        return await self.resolve_entity(name, entity_type)
 
     async def get_account(self, account_ref: str | int) -> tuple[dict[str, Any], bool, float]:
         identifier = str(account_ref).strip()
@@ -263,7 +297,13 @@ class QBOReferenceResolver:
         }
 
     async def resolve_item_income_account(self, identifier: str) -> dict[str, str]:
-        record = await self._resolve_record("Item", identifier, name_field="Name")
+        # QuickBooks rejects UPPER() for Item queries; keep case-sensitive lookup.
+        record = await self._resolve_record(
+            "Item",
+            identifier,
+            name_field="Name",
+            case_insensitive=False,
+        )
         if record is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -470,3 +510,54 @@ class QBOReferenceResolver:
 
     def _escape(self, value: str) -> str:
         return value.replace("'", "''")
+
+    async def _create_account(
+        self,
+        name: str,
+        *,
+        account_type: Optional[str],
+        account_sub_type: Optional[str] = None,
+    ) -> dict[str, str]:
+        sanitized_name = self._sanitize_account_name(name)
+        payload: dict[str, Any] = {"Name": sanitized_name}
+        if account_type:
+            payload["AccountType"] = account_type
+        if account_sub_type:
+            payload["AccountSubType"] = account_sub_type
+        try:
+            data, _, _ = await self.qbo_service.post(
+                self.session,
+                self.credential,
+                entity="Account",
+                resource="account",
+                payload=payload,
+            )
+        except QuickBooksOAuthError:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="QuickBooks credentials are invalid or expired",
+            )
+        except QuickBooksApiError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="QuickBooks API error",
+            ) from exc
+        account = self._extract_entity(data, "Account")
+        if account is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to auto-create account in QuickBooks",
+            )
+        reference = self._build_reference(account, name_field="Name")
+        self._store_cache("Account", name, reference, account)
+        return reference
+
+    def _sanitize_account_name(self, name: str) -> str:
+        """
+        QuickBooks rejects colons, tabs, and newlines in Account names.
+        Replace forbidden characters and collapse whitespace to keep creation simple.
+        """
+        sanitized = name.replace(":", " ").replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+        if not sanitized:
+            sanitized = "Auto Account"
+        return sanitized
