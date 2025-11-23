@@ -283,6 +283,7 @@ async def create_deposit(
     client_id: str,
     payload: DepositCreate,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    auto_create: bool = Query(default=False),
     session: AsyncSession = Depends(get_session),
     environment: str | None = Query(default=None),
     settings: Settings = Depends(get_settings),
@@ -296,8 +297,19 @@ async def create_deposit(
     client_id_str = str(client_uuid)
     qbo_service = QuickBooksService(settings)
     resolver = QBOReferenceResolver(qbo_service, session, credential)
-    deposit_account_ref = await resolver.resolve_account(payload.deposit_to_account, account_type="Bank")
-    line_payloads, total_amount, line_descriptor = await _build_deposit_lines(payload.lines, resolver)
+    allow_auto_create = auto_create or env == "sandbox"
+    deposit_account_ref = await resolver.ensure_account(
+        payload.deposit_to_account,
+        account_type="Bank",
+        account_sub_type="Checking",
+        auto_create=allow_auto_create,
+    )
+    line_payloads, total_amount, line_descriptor = await _build_deposit_lines(
+        payload.lines,
+        resolver,
+        auto_create_accounts=allow_auto_create,
+        auto_create_entities=allow_auto_create,
+    )
 
     deposit_payload: dict[str, Any] = {
         "TxnDate": payload.date.isoformat(),
@@ -1488,9 +1500,19 @@ async def create_expense(
     client_id_str = str(client_uuid)
     qbo_service = QuickBooksService(settings)
     resolver = QBOReferenceResolver(qbo_service, session, credential)
-    vendor_ref = await resolver.resolve_vendor(payload.vendor, auto_create=auto_create)
-    bank_ref = await resolver.resolve_account(payload.bank_account, account_type="Bank")
-    line_payloads, total_amount, line_descriptor = await _build_expense_lines(payload.lines, resolver)
+    allow_auto_create = auto_create or env == "sandbox"
+    vendor_ref = await resolver.resolve_vendor(payload.vendor, auto_create=allow_auto_create)
+    bank_ref = await resolver.ensure_account(
+        payload.bank_account,
+        account_type="Bank",
+        account_sub_type="Checking",
+        auto_create=allow_auto_create,
+    )
+    line_payloads, total_amount, line_descriptor = await _build_expense_lines(
+        payload.lines,
+        resolver,
+        auto_create_accounts=allow_auto_create,
+    )
 
     expense_payload: dict[str, Any] = {
         "TxnDate": payload.date.isoformat(),
@@ -1666,18 +1688,36 @@ async def _build_bill_lines(
 async def _build_deposit_lines(
     lines: Iterable[DepositLine],
     resolver: QBOReferenceResolver,
+    *,
+    auto_create_accounts: bool = False,
+    auto_create_entities: bool = False,
 ) -> tuple[list[dict[str, Any]], Decimal, Optional[str]]:
     payload_lines: list[dict[str, Any]] = []
     total_amount = Decimal("0")
     first_description: Optional[str] = None
     for line in lines:
         total_amount += line.amount
+        account_ref: dict[str, str]
         try:
             account_ref = await resolver.resolve_account(line.account_or_item)
         except HTTPException as exc:
             if exc.status_code != status.HTTP_404_NOT_FOUND:
                 raise
-            account_ref = await resolver.resolve_item_income_account(line.account_or_item)
+            try:
+                account_ref = await resolver.resolve_item_income_account(line.account_or_item)
+            except HTTPException as item_exc:
+                if (
+                    item_exc.status_code == status.HTTP_404_NOT_FOUND
+                    and auto_create_accounts
+                ):
+                    account_ref = await resolver.ensure_account(
+                        line.account_or_item,
+                        account_type="Income",
+                        account_sub_type="SalesOfProductIncome",
+                        auto_create=True,
+                    )
+                else:
+                    raise
         detail: dict[str, Any] = {
             "Amount": float(line.amount),
             "DetailType": "DepositLineDetail",
@@ -1686,7 +1726,11 @@ async def _build_deposit_lines(
             },
         }
         if line.entity_type and line.entity_name:
-            entity_ref = await resolver.resolve_entity(line.entity_name, line.entity_type)
+            entity_ref = await resolver.resolve_entity_with_auto_create(
+                line.entity_name,
+                line.entity_type,
+                auto_create=auto_create_entities,
+            )
             detail["DepositLineDetail"]["Entity"] = entity_ref
         if line.class_name:
             class_ref = await resolver.resolve_class(line.class_name)
@@ -1759,13 +1803,26 @@ async def _build_billpayment_lines(
 async def _build_expense_lines(
     lines: list[ExpenseLine],
     resolver: QBOReferenceResolver,
+    *,
+    auto_create_accounts: bool = False,
 ) -> tuple[list[dict[str, Any]], Decimal, Optional[str]]:
     payload_lines: list[dict[str, Any]] = []
     total_amount = Decimal("0")
     first_description: Optional[str] = None
     for line in lines:
         total_amount += line.amount
-        account_ref = await resolver.resolve_account(line.expense_account)
+        try:
+            account_ref = await resolver.resolve_account(line.expense_account)
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND and auto_create_accounts:
+                account_ref = await resolver.ensure_account(
+                    line.expense_account,
+                    account_type="Expense",
+                    account_sub_type="OfficeGeneralAdministrativeExpenses",
+                    auto_create=True,
+                )
+            else:
+                raise
         detail = {
             "Amount": float(line.amount),
             "DetailType": "AccountBasedExpenseLineDetail",

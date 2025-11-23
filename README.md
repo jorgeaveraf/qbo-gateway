@@ -235,6 +235,7 @@ POST /qbo/{client_id}/expenses?auto_create=true
 Rules:
 - `Idempotency-Key` header is **required** for every POST route; fingerprints follow `realmId|entity|...` (per endpoint above) so retries return the exact same response body.
 - `auto_create=true` allows the service to create a missing Customer or Vendor (DisplayName-based) on the fly; all other references (Items, Accounts, Classes, bank accounts) must already exist and can be referenced by QuickBooks Id or name.
+- When posting Deposits or Expenses against the **sandbox** environment, missing vendors/customers and referenced bank/income/expense accounts are auto-created to streamline testing (the same behavior can be forced in any environment via `?auto_create=true`).
 - References (`CustomerRef`, `VendorRef`, `AccountRef`, `ItemRef`, `ClassRef`) are resolved lazily and cached for the lifetime of the request to minimize duplicate lookups.
 
 #### QBO AR/AP proxy (Invoices, Bills, Deposits, Payments, BillPayments, Items, Customers, Vendors, Accounts)
@@ -343,31 +344,54 @@ Import into Postman, update the variables, and reuse the same `Idempotency-Key` 
 
 # Annex A — ETL to Deposit Mapping
 
-## Deposit Transaction (QBO → Deposit / POST /deposits)
-| ETL Source Field | Deposit POST Field | Notes |
-|------------------|--------------------|-------|
-| bank_account + bank_cc_num | deposit_to_account | Name of the bank account in QBO |
-| date | date | Transaction date |
-| txn_id | doc_number | Unique transaction ID |
-| description + extended_description | lines[n].description | Combined description |
-| amount | lines[n].amount | Amount must be positive |
-| qbo_account / qbo_sub_account | lines[n].account_or_item | Income account |
-| entity_qbo | lines[n].entity_name | Entity name tied to deposit |
-| entity type | lines[n].entity_type | Customer/Vendor |
-| drive_location | private_note | Optional memo |
+## Deposit Transaction (ETL → QBO Deposit / POST /deposits)
+
+### Header
+
+| ETL Source Field              | Deposit POST Field     | Notes |
+|------------------------------|------------------------|-------|
+| bank_account + bank_cc_num   | deposit_to_account     | Bank account name/code in QBO (e.g., `DMD 2035`). |
+| date                         | date                   | Transaction date. |
+| txn_id                       | doc_number             | Unique transaction ID from the ETL (appears as “Ref no.” in QBO). |
+| txn_id                       | txn_id                 | Same value; used for internal traceability in the gateway. |
+| txn_id                       | **Idempotency-Key (header)** | Idempotency key for the POST request to the gateway. |
+| drive_location (if present)  | private_note           | Optional memo (e.g., link to Drive folder). |
+
+### Lines[n]
+
+| ETL Source Field              | Deposit POST Field        | Notes |
+|------------------------------|---------------------------|-------|
+| description + extended_description | lines[n].description  | Full line description for the deposit. |
+| amount (must be > 0)         | lines[n].amount           | Deposit amount. If the ETL amount is negative, convert to positive. |
+| qbo_account `\|` qbo_sub_account | lines[n].account_or_item | Income account for the deposit line (e.g., `Delivery Revenue`). `qbo_account` is used; fallback to `qbo_sub_account` only if applicable. |
+| payee_vendor                 | lines[n].entity_name      | Name shown as **Received From** in QBO (e.g., `STRONGHOLD`). |
+| Business rules / classification | lines[n].entity_type   | `"Customer"` / `"Vendor"` / `"Other"` according to finance classification. |
+| (not present in ETL)         | lines[n].class            | Optional; currently sent as empty. |
+| (not present in ETL)         | lines[n].linked_doc       | Optional for future document linking; currently sent as empty. |
 
 ---
 
 # Annex B — ETL to Expense Mapping
 
-## Expense Transaction (QBO → Purchase / POST /expenses)
-| ETL Source Field | Expense POST Field | Notes |
-|------------------|---------------------|-------|
-| payee_vendor | vendor | Vendor name |
-| bank_account + bank_cc_num | bank_account | Bank account used |
-| date | date | Expense date |
-| qbo_account / qbo_sub_account | lines[n].expense_account | Expense account |
-| description + extended_description | lines[n].description | Full description |
-| amount (negative in ETL) | lines[n].amount | Convert to positive |
-| drive_location | private_note | Optional memo |
-| txn_id | doc_number | Unique identifier |
+## Expense Transaction (ETL → QBO Purchase / POST /expenses)
+
+### Header
+
+| ETL Source Field              | Expense POST Field       | Notes |
+|------------------------------|--------------------------|-------|
+| payee_vendor                 | vendor                   | Vendor name shown on the Expense. |
+| bank_account + bank_cc_num   | bank_account             | Bank/credit card account used to pay the expense (e.g., `DMD 71000`). |
+| date                         | date                     | Expense date. |
+| txn_id                       | doc_number               | Unique transaction ID from the ETL (appears as “Ref no.” in QBO). |
+| txn_id                       | **Idempotency-Key (header)** | Idempotency key for the POST request to the gateway. |
+| drive_location (if present)  | private_note             | Optional memo (e.g., link to Drive folder). |
+
+### Lines[n]
+
+| ETL Source Field                    | Expense POST Field        | Notes |
+|------------------------------------|---------------------------|-------|
+| amount (negative in ETL)           | lines[n].amount           | Expense amount. The ETL amount is negative; send `abs(amount)` as a positive number. |
+| qbo_account `\|` qbo_sub_account   | lines[n].expense_account  | Expense account for the line (e.g., `Cost of Production:Production Supplies`). `qbo_account` is used; fallback to `qbo_sub_account` only if applicable. |
+| description + extended_description | lines[n].description      | Full line description for the expense. |
+| (not present in ETL)               | lines[n].class            | Optional; currently sent as empty. |
+
