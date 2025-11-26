@@ -132,10 +132,10 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         request_id = getattr(request.state, "request_id", None)
-        logger = logging.getLogger("app.errors")
-        logger.exception(
-            "unhandled_error",
-            extra={"correlation_id": request_id},
+        logging_utils.log_unhandled_exception(
+            "qbo_txn_unhandled_exception",
+            path=request.url.path,
+            method=request.method,
         )
         payload = {
             "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
