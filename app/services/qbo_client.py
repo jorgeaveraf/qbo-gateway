@@ -22,7 +22,10 @@ class QuickBooksOAuthError(RuntimeError):
 
 
 class QuickBooksApiError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None, body: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
 
 
 @dataclass
@@ -210,7 +213,11 @@ class QuickBooksService:
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                raise QuickBooksApiError(f"QBO API error: {exc.response.status_code}") from exc
+                raise QuickBooksApiError(
+                    f"QBO API error: {exc.response.status_code}",
+                    status_code=exc.response.status_code,
+                    body=exc.response.text,
+                ) from exc
 
             payload = response.json()
             return payload, refreshed, latency_ms
@@ -341,7 +348,7 @@ class QuickBooksService:
         entity: str,
         resource: str,
         payload: dict,
-    ) -> tuple[dict, bool, float]:
+    ) -> tuple[dict, bool, float, int]:
         token, refreshed = await self.ensure_valid_access_token(session, credential)
         url = self._build_entity_url(credential, resource)
         headers = {
@@ -350,6 +357,7 @@ class QuickBooksService:
             "Content-Type": "application/json",
         }
         latency_ms = 0.0
+        status_code = 0
         async with get_async_client(self.settings) as client:
             start = perf_counter()
             response = await request_with_retry_and_backoff(
@@ -362,6 +370,7 @@ class QuickBooksService:
                 settings=self.settings,
             )
             latency_ms = (perf_counter() - start) * 1000
+            status_code = response.status_code
 
             if response.status_code == 401:
                 self.logger.warning(
@@ -386,6 +395,7 @@ class QuickBooksService:
                     settings=self.settings,
                 )
                 latency_ms = (perf_counter() - start) * 1000
+                status_code = response.status_code
 
             try:
                 response.raise_for_status()
@@ -404,11 +414,13 @@ class QuickBooksService:
                     },
                 )
                 raise QuickBooksApiError(
-                    f"QBO post error for {entity}: {status_code} {body}"
+                    f"QBO post error for {entity}: {status_code} {body}",
+                    status_code=status_code,
+                    body=body,
                 ) from exc
 
             response_payload = response.json()
-            return response_payload, refreshed, latency_ms
+            return response_payload, refreshed, latency_ms, status_code
 
     async def rotate_credential(
         self,

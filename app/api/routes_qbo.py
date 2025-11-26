@@ -761,7 +761,7 @@ async def update_account(
     update_payload = {key: value for key, value in update_payload.items() if value is not None}
 
     try:
-        data, refreshed_update, latency_ms = await qbo_service.post(
+        data, refreshed_update, latency_ms, _ = await qbo_service.post(
             session,
             credential,
             entity="Account",
@@ -1297,7 +1297,52 @@ async def _execute_qbo_post(
     entity: str,
     resource: str,
     payload: dict[str, Any],
+    success_status_code: int = status.HTTP_201_CREATED,
 ) -> QBOProxyResponse:
+    def _extract_txn_identifiers(payload_obj: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+        txn_id = None
+        doc_number = None
+        for key in ("txn_id", "TxnId", "txnId"):
+            if key in payload_obj:
+                txn_id = payload_obj.get(key)
+                break
+        for key in ("doc_number", "DocNumber", "docNumber"):
+            if key in payload_obj:
+                doc_number = payload_obj.get(key)
+                break
+        return txn_id, doc_number
+
+    def _classify_error(status_code: Optional[int], exc: Exception) -> str:
+        if isinstance(exc, QuickBooksOAuthError):
+            return "qbo_oauth"
+        if status_code is None:
+            return "unknown"
+        if status_code >= 500:
+            return "qbo_5xx"
+        if status_code >= 400:
+            return "qbo_4xx"
+        return "unknown"
+
+    def _truncate(body: Optional[str], limit: int = 400) -> Optional[str]:
+        if body is None:
+            return None
+        if len(body) <= limit:
+            return body
+        return body[:limit] + "..."
+
+    txn_id, doc_number = _extract_txn_identifiers(request_payload)
+    txn_type = resource or entity.lower()
+    logging_utils.log_qbo_txn_started(
+        client_id=client_id_str,
+        realm_id=credential.realm_id,
+        environment=env,
+        txn_type=txn_type,
+        txn_id=txn_id,
+        doc_number=doc_number,
+        idempotency_key=idempotency_key,
+        payload=request_payload,
+    )
+
     record, reused = await register_idempotency_key(
         session,
         client_id=client_uuid,
@@ -1307,10 +1352,24 @@ async def _execute_qbo_post(
         fingerprint=fingerprint,
     )
     if reused and record.response_body:
+        logging_utils.log_qbo_txn_finished(
+            client_id=client_id_str,
+            realm_id=credential.realm_id,
+            environment=env,
+            txn_type=txn_type,
+            txn_id=txn_id,
+            doc_number=doc_number,
+            idempotency_key=idempotency_key,
+            gateway_status_code=success_status_code,
+            qbo_status_code=None,
+            latency_ms=None,
+            result="success",
+            idempotent_reuse=True,
+        )
         return QBOProxyResponse.model_validate(record.response_body)
 
     try:
-        data, refreshed, latency_ms = await qbo_service.post(
+        data, refreshed, latency_ms, qbo_status_code = await qbo_service.post(
             session,
             credential,
             entity=entity,
@@ -1318,11 +1377,43 @@ async def _execute_qbo_post(
             payload=payload,
         )
     except QuickBooksApiError as exc:
+        logging_utils.log_qbo_txn_finished(
+            client_id=client_id_str,
+            realm_id=credential.realm_id,
+            environment=env,
+            txn_type=txn_type,
+            txn_id=txn_id,
+            doc_number=doc_number,
+            idempotency_key=idempotency_key,
+            gateway_status_code=status.HTTP_502_BAD_GATEWAY,
+            qbo_status_code=exc.status_code,
+            latency_ms=None,
+            result="failure",
+            error_code=_classify_error(exc.status_code, exc),
+            error_message=str(exc),
+            qbo_error_details=_truncate(getattr(exc, "body", None)),
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"QuickBooks API error: {exc}",
         ) from exc
     except QuickBooksOAuthError as exc:
+        logging_utils.log_qbo_txn_finished(
+            client_id=client_id_str,
+            realm_id=credential.realm_id,
+            environment=env,
+            txn_type=txn_type,
+            txn_id=txn_id,
+            doc_number=doc_number,
+            idempotency_key=idempotency_key,
+            gateway_status_code=status.HTTP_502_BAD_GATEWAY,
+            qbo_status_code=None,
+            latency_ms=None,
+            result="failure",
+            error_code="qbo_oauth",
+            error_message=str(exc),
+            qbo_error_details=None,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
@@ -1340,6 +1431,20 @@ async def _execute_qbo_post(
     )
     await store_idempotent_response(session, record, jsonable_encoder(response_model))
     await session.commit()
+    logging_utils.log_qbo_txn_finished(
+        client_id=client_id_str,
+        realm_id=credential.realm_id,
+        environment=env,
+        txn_type=txn_type,
+        txn_id=txn_id,
+        doc_number=doc_number,
+        idempotency_key=idempotency_key,
+        gateway_status_code=success_status_code,
+        qbo_status_code=qbo_status_code,
+        latency_ms=latency_ms,
+        result="success",
+        qbo_error_details=None,
+    )
     return response_model
 
 

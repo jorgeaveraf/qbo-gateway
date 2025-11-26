@@ -34,7 +34,7 @@ class QBOReferenceResolver:
             return reference
         if auto_create:
             payload = {"DisplayName": identifier}
-            data, _, _ = await self.qbo_service.post(
+            data, _, _, _ = await self.qbo_service.post(
                 self.session,
                 self.credential,
                 entity="Customer",
@@ -66,7 +66,7 @@ class QBOReferenceResolver:
             return reference
         if auto_create:
             payload = {"DisplayName": identifier}
-            data, _, _ = await self.qbo_service.post(
+            data, _, _, _ = await self.qbo_service.post(
                 self.session,
                 self.credential,
                 entity="Vendor",
@@ -525,7 +525,7 @@ class QBOReferenceResolver:
         if account_sub_type:
             payload["AccountSubType"] = account_sub_type
         try:
-            data, _, _ = await self.qbo_service.post(
+            data, _, _, _ = await self.qbo_service.post(
                 self.session,
                 self.credential,
                 entity="Account",

@@ -14,6 +14,7 @@ The service is designed to be consumed by other components (e.g., Airflow) via H
 - [API and Security](#api-and-security)
 - [Postman Collection](#postman-collection)
 - [Observability and Logging](#observability-and-logging)
+- [Reference Resolution & Auto-Create (Design Notes)](#reference-resolution--auto-create-design-notes)
 - [Testing Plan](#testing-plan)
 - [Suggested Next Steps](#suggested-next-steps)
 
@@ -340,7 +341,50 @@ Import into Postman, update the variables, and reuse the same `Idempotency-Key` 
 3. Build synthetic integration tests (GitHub Actions + sandbox credentials) that exercise the new Invoice/Bill/Payment/BillPayment flows nightly.
 4. Stream structured audit events (e.g., to Kafka or Cloud Logging) each time an AR/AP write succeeds or fails, enabling downstream reconciliation.
 5. Extend the API with optional attachments (PDF/XML) by using the QBO Upload API, so invoices and bills can include supporting documents.
+## Reference Resolution & Auto-Create (Design Notes)
 
+- `QBOReferenceResolver` centraliza los lookups con caché en memoria. Las búsquedas usan `select * from <Entity> where ... startposition=1 maxresults=1`. Errores de OAuth o API devuelven HTTP 502.
+- `resolve_customer` / `resolve_vendor`: `UPPER(DisplayName) = '<identifier>'`; si `auto_create` se envía `POST /customer` o `POST /vendor` con `DisplayName`.
+- `resolve_account`: `UPPER(Name) = '<identifier>'`; si se pasa `account_type`, agrega `AccountType = '<type>'`. No usa `FullyQualifiedName` ni reintenta sin tipo. Activos e inactivos se incluyen (no hay filtro `Active`).
+- `ensure_account`: intenta `resolve_account` y si 404 + `auto_create`, llama a `_create_account` con `Name` saneado (reemplaza `:` por espacio, elimina tabs/newlines) y opcionalmente `AccountType` + `AccountSubType`.
+- `resolve_item`: `FullyQualifiedName` case-sensitive (QuickBooks rechaza `UPPER()` para Item). `resolve_class` usa `FullyQualifiedName` case-sensitive. `resolve_entity_with_auto_create` solo auto-crea Customer/Vendor.
+- `_execute_qbo_post` maneja idempotencia y logging; los handlers construyen payloads con refs resueltas antes de llegar aquí.
+
+### Por qué aparece `6240 Duplicate Name Exists Error` al crear Accounts
+
+- En Expenses con `auto_create=true` (o sandbox), cada línea hace: `resolve_account(line.expense_account)` (Name exacta); si 404, `ensure_account` con `AccountType='Expense'` y `AccountSubType='OfficeGeneralAdministrativeExpenses'`. El Name enviado al POST se sanea.
+- Si se envía un FullyQualifiedName (ej. `Delivery COGS:Labor Cost`), el lookup usa `Name` en vez de `FullyQualifiedName`; la cuenta real puede existir como subcuenta (`Name='Labor Cost'`, `FullyQualifiedName='Delivery COGS:Labor Cost'`) o con otro `AccountType` (p.ej. `Cost of Goods Sold`). El filtro `AccountType='Expense'` impide verla.
+- Tras no encontrar nada, `_create_account` intenta crear `Name='Delivery COGS Labor Cost'` (dos diferencias: saneo y `AccountType=Expense`). QuickBooks responde 6240 porque ya existe una cuenta con ese display name/FullyQualifiedName bajo otro tipo o jerarquía.
+- Filtros que pueden ocultar la cuenta antes de auto-crear: `AccountType` distinto, uso de `Name` (no `FullyQualifiedName`), subcuentas donde el nombre del hijo no incluye al padre, y posibles cuentas inactivas con otro tipo que no coinciden con el filtro de tipo.
+
+### Resumen por endpoint (POST)
+
+| Endpoint | Resolución de referencias | Auto-create | Consultas típicas |
+|----------|--------------------------|-------------|-------------------|
+| `/qbo/{id}/expenses` | Vendor (`DisplayName`), Bank Account `AccountType=Bank`, líneas: Account (Name) o auto-create Expense | Vendor auto-create si `auto_create`/sandbox; Bank auto-create; líneas crean Expense account si 404 | Accounts: `select * from Account where AccountType='Expense' AND UPPER(Name)=...` al auto-crear |
+| `/qbo/{id}/deposits` | DepositToAccount `AccountType=Bank`; líneas: Account (Name) o Item income account; optional Entity (Customer/Vendor/Employee/Other), Class | Auto-create Bank acct e Income acct si `auto_create`/sandbox; Entity auto-create solo Customer/Vendor | Accounts: `select * from Account where AccountType='Bank' AND UPPER(Name)=...`; Income auto-create: `AccountType='Income'` |
+| `/qbo/{id}/invoices` | Customer, líneas: Item (FullyQualifiedName) o Account (Name), Class | Sin auto-create de cuentas; Customer auto-create si `auto_create` | Accounts: `select * from Account where UPPER(Name)=...` |
+| `/qbo/{id}/salesreceipts` | Igual que invoices | Igual | Igual |
+| `/qbo/{id}/bills` | Vendor, líneas: Item o Account (Name), Class | Sin auto-create | Igual |
+| `/qbo/{id}/payments` | Customer; optional DepositToAccount/ARAccount (Name) | Sin auto-create | Igual |
+| `/qbo/{id}/billpayments` | Vendor; bank/cc account (Name) con `AccountType=Bank|Credit Card`; optional APAccount | Sin auto-create | Accounts con filtro `AccountType` según `payment_type` |
+| `/qbo/{id}/items` | IncomeAccount, optional Expense/Asset accounts (Name) | Sin auto-create | Igual |
+| `/qbo/{id}/customers` | N/A (directo a POST) | N/A | N/A |
+| `/qbo/{id}/vendors` | N/A (directo a POST) | N/A | N/A |
+
+### Posibles inconsistencias
+
+- Solo Expenses y Deposits auto-crean cuentas; el resto falla en 404 sin reintentos más laxos.
+- Cuando se fuerza `AccountType` (Bank/Income/Expense) en `ensure_account`, no hay reintento sin tipo, de modo que una cuenta existente con otro tipo no se reutiliza y puede terminar en 6240.
+- Los lookups de Account usan `Name`, no `FullyQualifiedName`; depósitos/bills/invoices no encuentran subcuentas si se envía el FQN.
+- `auto_create` se extiende implícitamente a sandbox para Expenses/Deposits, pero no para otros endpoints.
+
+### Candidate changes (no implementados aún)
+
+- Si el identificador contiene `:` o falla con 6240, reintentar lookup por `FullyQualifiedName` y sin `AccountType`, reutilizando la cuenta existente.
+- En `_create_account`, mapear `ParentRef` cuando se reciba un FQN (`A:B` → parent `A`, name `B`) para evitar nuevos nombres saneados.
+- Normalizar la búsqueda de Accounts para que primero use `Name`, luego `FullyQualifiedName`, y solo después aplique `AccountType` como filtro secundario.
+- Unificar la semántica de `auto_create` (decidir si sandbox siempre auto-crea o respetar el flag en todos los endpoints) y documentarlo en la API pública.
 
 # Annex A — ETL to Deposit Mapping
 
@@ -395,3 +439,10 @@ Import into Postman, update the variables, and reuse the same `Idempotency-Key` 
 | description + extended_description | lines[n].description      | Full line description for the expense. |
 | (not present in ETL)               | lines[n].class            | Optional; currently sent as empty. |
 
+## Tracing & Observability
+
+- Cada POST de QBO (deposits, expenses, invoices, etc.) emite logs estructurados `qbo_txn_attempt_started` y `qbo_txn_attempt_finished`.
+- Campos clave para correlacionar desde Airflow/Kibana: `request_id`, `idempotency_key`, `doc_number`/`txn_id`, `client_id`, `realm_id`, `txn_type`, `environment`.
+- En `qbo_txn_attempt_started` se incluye el payload sanitizado (sin tokens ni secretos).
+- En `qbo_txn_attempt_finished` se registran: `gateway_status_code`, `qbo_status_code` (si aplica), `latency_ms`, `result=success|failure`, `error_code`, `error_message`, `qbo_error_details` (recortado).
+- Las excepciones no controladas generan `qbo_txn_unhandled_exception` con `request_id`, `path` y `method`.
