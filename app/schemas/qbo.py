@@ -23,6 +23,7 @@ class QBOProxyResponse(BaseModel):
     latency_ms: float
     data: dict[str, Any]
     refreshed: Optional[bool] = None
+    idempotent_reuse: bool = False
 
 
 class QBOListResponse(BaseModel):

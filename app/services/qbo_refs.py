@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import request_id_ctx
 from app.db.models import ClientCredentials
 from app.services.qbo_client import QuickBooksApiError, QuickBooksOAuthError, QuickBooksService
 
@@ -93,15 +95,9 @@ class QBOReferenceResolver:
         *,
         account_type: Optional[str] = None,
     ) -> dict[str, str]:
-        filters: list[str] = []
-        if account_type:
-            filters.append(f"AccountType = '{self._escape(account_type)}'")
-        reference, _ = await self._resolve_entity(
-            "Account",
+        reference, _ = await self._resolve_account_reference(
             identifier,
-            name_field="Name",
-            extra_filters=filters,
-            case_insensitive=False,
+            account_type=account_type,
         )
         if reference:
             return reference
@@ -118,11 +114,17 @@ class QBOReferenceResolver:
         account_sub_type: Optional[str] = None,
         auto_create: bool = False,
     ) -> dict[str, str]:
-        try:
-            return await self.resolve_account(identifier, account_type=account_type)
-        except HTTPException as exc:
-            if exc.status_code != status.HTTP_404_NOT_FOUND or not auto_create:
-                raise
+        reference, _ = await self._resolve_account_reference(
+            identifier,
+            account_type=account_type,
+        )
+        if reference:
+            return reference
+        if not auto_create:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Account '{identifier}' not found",
+            )
         return await self._create_account(
             identifier,
             account_type=account_type,
@@ -511,6 +513,206 @@ class QBOReferenceResolver:
     def _escape(self, value: str) -> str:
         return value.replace("'", "''")
 
+    async def _resolve_account_reference(
+        self,
+        identifier: str,
+        *,
+        account_type: Optional[str],
+    ) -> tuple[Optional[dict[str, str]], Optional[dict[str, Any]]]:
+        record = await self._resolve_account_with_retries(
+            identifier,
+            account_type=account_type,
+            allow_account_type_relaxation=True,
+        )
+        if record is None:
+            return None, None
+        reference = self._build_reference(record, name_field="Name")
+        self._store_cache("Account", identifier, reference, record)
+        return reference, record
+
+    async def _resolve_account_with_retries(
+        self,
+        identifier: str,
+        *,
+        account_type: Optional[str],
+        allow_account_type_relaxation: bool,
+    ) -> Optional[dict[str, Any]]:
+        expected_account_type = account_type
+        candidates: list[Optional[str]] = [account_type] if account_type is not None else [None]
+        if account_type is not None and allow_account_type_relaxation and None not in candidates:
+            candidates.append(None)
+        for candidate in candidates:
+            record = await self._attempt_account_resolution(
+                identifier,
+                account_type=candidate,
+            )
+            if record:
+                self._log_account_type_mismatch(
+                    identifier=identifier,
+                    expected_account_type=expected_account_type,
+                    actual_account_type=record.get("AccountType"),
+                )
+                return record
+        return None
+
+    async def _attempt_account_resolution(
+        self,
+        identifier: str,
+        *,
+        account_type: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        normalized = identifier.strip()
+        is_fully_qualified = ":" in normalized
+
+        if is_fully_qualified:
+            record = await self._query_account(
+                identifier=normalized,
+                name_field="FullyQualifiedName",
+                account_type=None,
+                case_insensitive=False,
+            )
+            if record:
+                return record
+            leaf = normalized.rsplit(":", 1)[-1].strip()
+            record = await self._query_account(
+                identifier=leaf,
+                name_field="Name",
+                account_type=account_type,
+                case_insensitive=False,
+            )
+            return record
+
+        record = await self._query_account(
+            identifier=normalized,
+            name_field="Name",
+            account_type=account_type,
+            case_insensitive=False,
+        )
+        return record
+
+    async def _query_account(
+        self,
+        *,
+        identifier: str,
+        name_field: str,
+        account_type: Optional[str],
+        case_insensitive: bool,
+    ) -> Optional[dict[str, Any]]:
+        filters: list[str] = []
+        if account_type:
+            filters.append(f"AccountType = '{self._escape(account_type)}'")
+        return await self._resolve_record(
+            "Account",
+            identifier,
+            name_field=name_field,
+            extra_filters=filters,
+            case_insensitive=case_insensitive,
+        )
+
+    def _log_account_type_mismatch(
+        self,
+        *,
+        identifier: str,
+        expected_account_type: Optional[str],
+        actual_account_type: Optional[str],
+    ) -> None:
+        if expected_account_type is None or actual_account_type is None:
+            return
+        if expected_account_type.strip().lower() == actual_account_type.strip().lower():
+            return
+        self.qbo_service.logger.warning(
+            "account_type_mismatch",
+            extra={
+                "identifier": identifier,
+                "expected_account_type": expected_account_type,
+                "actual_account_type": actual_account_type,
+                "request_id": request_id_ctx.get(),
+                "realm_id": self.credential.realm_id,
+            },
+        )
+
+    def _extract_qbo_error_code(self, body: Optional[str]) -> Optional[str]:
+        if not body:
+            return None
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return None
+        fault = payload.get("Fault", {})
+        errors = fault.get("Error") or []
+        if isinstance(errors, dict):
+            errors = [errors]
+        for error in errors:
+            code = error.get("code")
+            if code:
+                return str(code)
+        return None
+
+    async def _recover_from_duplicate_account_error(
+        self,
+        exc: QuickBooksApiError,
+        *,
+        original_identifier: str,
+        payload_name: str,
+        account_type: Optional[str],
+    ) -> Optional[dict[str, str]]:
+        error_code = self._extract_qbo_error_code(exc.body)
+        if exc.status_code != 400 or error_code != "6240":
+            return None
+
+        self.qbo_service.logger.warning(
+            "account_duplicate_detected",
+            extra={
+                "identifier": original_identifier,
+                "payload_name": payload_name,
+                "account_type": account_type,
+                "request_id": request_id_ctx.get(),
+                "realm_id": self.credential.realm_id,
+            },
+        )
+
+        record = await self._resolve_account_with_retries(
+            original_identifier,
+            account_type=None,
+            allow_account_type_relaxation=False,
+        )
+        if record is None and payload_name != original_identifier:
+            record = await self._resolve_account_with_retries(
+                payload_name,
+                account_type=None,
+                allow_account_type_relaxation=False,
+            )
+        if record is None:
+            self.qbo_service.logger.error(
+                "account_duplicate_recovery_failed",
+                extra={
+                    "identifier": original_identifier,
+                    "payload_name": payload_name,
+                    "account_type": account_type,
+                    "request_id": request_id_ctx.get(),
+                    "realm_id": self.credential.realm_id,
+                    "qbo_error_code": error_code,
+                },
+            )
+            return None
+
+        reference = self._build_reference(record, name_field="Name")
+        self._store_cache("Account", original_identifier, reference, record)
+        if payload_name != original_identifier:
+            self._store_cache("Account", payload_name, reference, record)
+        self.qbo_service.logger.info(
+            "account_duplicate_reused",
+            extra={
+                "identifier": original_identifier,
+                "payload_name": payload_name,
+                "account_type": account_type,
+                "reused_account_id": record.get("Id"),
+                "request_id": request_id_ctx.get(),
+                "realm_id": self.credential.realm_id,
+            },
+        )
+        return reference
+
     async def _create_account(
         self,
         name: str,
@@ -518,12 +720,31 @@ class QBOReferenceResolver:
         account_type: Optional[str],
         account_sub_type: Optional[str] = None,
     ) -> dict[str, str]:
-        sanitized_name = self._sanitize_account_name(name)
-        payload: dict[str, Any] = {"Name": sanitized_name}
+        final_name, parent_identifier = self._sanitize_account_name(name)
+        payload: dict[str, Any] = {"Name": final_name}
         if account_type:
             payload["AccountType"] = account_type
         if account_sub_type:
             payload["AccountSubType"] = account_sub_type
+        if parent_identifier:
+            try:
+                parent_ref = await self.resolve_account(parent_identifier)
+                payload["ParentRef"] = parent_ref
+            except HTTPException as exc:
+                if exc.status_code != status.HTTP_404_NOT_FOUND:
+                    raise
+        self.qbo_service.logger.info(
+            "account_create_attempt",
+            extra={
+                "original_identifier": name,
+                "payload_name": final_name,
+                "parent_identifier": parent_identifier,
+                "account_type": account_type,
+                "account_sub_type": account_sub_type,
+                "request_id": request_id_ctx.get(),
+                "realm_id": self.credential.realm_id,
+            },
+        )
         try:
             data, _, _, _ = await self.qbo_service.post(
                 self.session,
@@ -538,6 +759,14 @@ class QBOReferenceResolver:
                 detail="QuickBooks credentials are invalid or expired",
             )
         except QuickBooksApiError as exc:
+            reused = await self._recover_from_duplicate_account_error(
+                exc,
+                original_identifier=name,
+                payload_name=final_name,
+                account_type=account_type,
+            )
+            if reused is not None:
+                return reused
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="QuickBooks API error",
@@ -552,12 +781,17 @@ class QBOReferenceResolver:
         self._store_cache("Account", name, reference, account)
         return reference
 
-    def _sanitize_account_name(self, name: str) -> str:
-        """
-        QuickBooks rejects colons, tabs, and newlines in Account names.
-        Replace forbidden characters and collapse whitespace to keep creation simple.
-        """
-        sanitized = name.replace(":", " ").replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
-        if not sanitized:
-            sanitized = "Auto Account"
-        return sanitized
+    def _sanitize_account_name(self, name: str) -> tuple[str, Optional[str]]:
+        normalized = name.strip()
+        parent_identifier: Optional[str] = None
+        leaf = normalized
+        if ":" in normalized:
+            parent_identifier, leaf = normalized.rsplit(":", 1)
+            parent_identifier = parent_identifier.strip()
+            leaf = leaf.strip()
+        cleaned_leaf = self._strip_control_characters(leaf)
+        final_name = cleaned_leaf or "Auto Account"
+        return final_name, parent_identifier
+
+    def _strip_control_characters(self, value: str) -> str:
+        return "".join(ch for ch in value if ch not in ("\r", "\n", "\t"))

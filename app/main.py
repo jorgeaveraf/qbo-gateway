@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
-from app.api import routes_auth, routes_clients, routes_qbo
+from app.api import routes_auth, routes_clients, routes_qbo, routes_reports
 from app.core.config import Settings, get_settings
 from app.core import logging as logging_utils
 from app.db.session import get_engine
@@ -156,6 +156,7 @@ def create_app() -> FastAPI:
     protected_router.include_router(routes_auth.router)
     protected_router.include_router(routes_clients.router)
     protected_router.include_router(routes_qbo.router)
+    protected_router.include_router(routes_reports.router)
     app.include_router(protected_router)
     app.include_router(routes_auth.public_router)
 

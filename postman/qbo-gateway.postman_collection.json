@@ -50,7 +50,21 @@
             ],
             "url": "{{base_url}}/auth/connect?client_id={{client_id}}&env={{environment}}"
           },
-          "response": []
+          "response": [
+            {
+              "name": "201 Idempotent Reuse",
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"client_id\": \"{{client_id}}\",\n  \"realm_id\": \"1234567890\",\n  \"environment\": \"sandbox\",\n  \"fetched_at\": \"2024-11-08T12:00:00Z\",\n  \"latency_ms\": 742.82,\n  \"data\": {\n    \"Purchase\": {\n      \"Id\": \"123\",\n      \"SyncToken\": \"0\",\n      \"TxnStatus\": \"Completed\"\n    }\n  },\n  \"refreshed\": false,\n  \"idempotent_reuse\": true\n}"
+            }
+          ]
         },
         {
           "name": "Auth - Callback",

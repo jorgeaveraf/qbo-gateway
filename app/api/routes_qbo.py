@@ -1352,6 +1352,9 @@ async def _execute_qbo_post(
         fingerprint=fingerprint,
     )
     if reused and record.response_body:
+        cached_body = record.response_body
+        if not isinstance(cached_body, dict):
+            cached_body = {}
         logging_utils.log_qbo_txn_finished(
             client_id=client_id_str,
             realm_id=credential.realm_id,
@@ -1366,7 +1369,7 @@ async def _execute_qbo_post(
             result="success",
             idempotent_reuse=True,
         )
-        return QBOProxyResponse.model_validate(record.response_body)
+        return QBOProxyResponse.model_validate({**cached_body, "idempotent_reuse": True})
 
     try:
         data, refreshed, latency_ms, qbo_status_code = await qbo_service.post(
@@ -1428,6 +1431,7 @@ async def _execute_qbo_post(
         latency_ms=round(latency_ms, 2),
         data=data,
         refreshed=refreshed,
+        idempotent_reuse=False,
     )
     await store_idempotent_response(session, record, jsonable_encoder(response_model))
     await session.commit()
