@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
+from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +23,10 @@ class QuickBooksOAuthError(RuntimeError):
 
 
 class QuickBooksApiError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None, body: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
 
 
 @dataclass
@@ -210,10 +214,293 @@ class QuickBooksService:
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                raise QuickBooksApiError(f"QBO API error: {exc.response.status_code}") from exc
+                raise QuickBooksApiError(
+                    f"QBO API error: {exc.response.status_code}",
+                    status_code=exc.response.status_code,
+                    body=exc.response.text,
+                ) from exc
 
             payload = response.json()
             return payload, refreshed, latency_ms
+
+    async def fetch_report(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        *,
+        report_name: str,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[dict, bool, float]:
+        token, refreshed = await self.ensure_valid_access_token(session, credential)
+        url = self._build_report_url(credential, report_name)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        request_params = {"minorversion": self.MINOR_VERSION}
+        if params:
+            request_params.update({key: value for key, value in params.items() if value is not None})
+
+        latency_ms = 0.0
+        async with get_async_client(self.settings) as client:
+            start = perf_counter()
+            response = await request_with_retry_and_backoff(
+                client,
+                method="GET",
+                url=url,
+                params=request_params,
+                headers=headers.copy(),
+                settings=self.settings,
+            )
+            latency_ms = (perf_counter() - start) * 1000
+
+            if response.status_code == 401:
+                self.logger.warning(
+                    "qbo_report_unauthorized",
+                    extra={
+                        "report": report_name,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                refreshed = await self._refresh_credential(session, credential, force=True)
+                headers["Authorization"] = f"Bearer {credential.access_token}"
+                start = perf_counter()
+                response = await request_with_retry_and_backoff(
+                    client,
+                    method="GET",
+                    url=url,
+                    params=request_params,
+                    headers=headers.copy(),
+                    settings=self.settings,
+                )
+                latency_ms = (perf_counter() - start) * 1000
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = exc.response.text
+                status_code = exc.response.status_code
+                self.logger.error(
+                    "qbo_report_failed",
+                    extra={
+                        "report": report_name,
+                        "status": status_code,
+                        "body": body,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                raise QuickBooksApiError(
+                    f"QBO report error for {report_name}: {status_code} {body}",
+                    status_code=status_code,
+                    body=body,
+                ) from exc
+
+            payload = response.json()
+            return payload, refreshed, latency_ms
+
+    async def query(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        *,
+        entity: str,
+        select_sql: str,
+        startposition: int | None = None,
+        maxresults: int | None = None,
+    ) -> tuple[dict, bool, float]:
+        token, refreshed = await self.ensure_valid_access_token(session, credential)
+        url = self._build_query_url(credential)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        statement = select_sql.strip()
+        if startposition:
+            statement = f"{statement} STARTPOSITION {startposition}"
+        if maxresults:
+            statement = f"{statement} MAXRESULTS {maxresults}"
+        latency_ms = 0.0
+        params = {
+            "query": statement,
+            "minorversion": self.MINOR_VERSION,
+        }
+        async with get_async_client(self.settings) as client:
+            start = perf_counter()
+            response = await request_with_retry_and_backoff(
+                client,
+                method="GET",
+                url=url,
+                params=params,
+                headers=headers.copy(),
+                settings=self.settings,
+            )
+            latency_ms = (perf_counter() - start) * 1000
+
+            if response.status_code == 401:
+                self.logger.warning(
+                    "qbo_query_unauthorized",
+                    extra={
+                        "entity": entity,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                refreshed = await self._refresh_credential(session, credential, force=True)
+                headers["Authorization"] = f"Bearer {credential.access_token}"
+                start = perf_counter()
+                response = await request_with_retry_and_backoff(
+                    client,
+                    method="GET",
+                    url=url,
+                    params=params,
+                    headers=headers.copy(),
+                    settings=self.settings,
+                )
+                latency_ms = (perf_counter() - start) * 1000
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = exc.response.text
+                status_code = exc.response.status_code
+                self.logger.error(
+                    "qbo_query_failed",
+                    extra={
+                        "entity": entity,
+                        "status": status_code,
+                        "body": body,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                raise QuickBooksApiError(
+                    f"QBO query error for {entity}: {status_code} {body}"
+                ) from exc
+
+            payload = response.json()
+            return payload, refreshed, latency_ms
+
+    async def query_accounts(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        *,
+        select_sql: str,
+        startposition: int | None = None,
+        maxresults: int | None = None,
+    ) -> tuple[dict, bool, float]:
+        return await self.query(
+            session,
+            credential,
+            entity="Account",
+            select_sql=select_sql,
+            startposition=startposition,
+            maxresults=maxresults,
+        )
+
+    async def get_account_by_id(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        account_id: str,
+    ) -> tuple[dict, bool, float]:
+        escaped = self._escape(account_id)
+        query = f"select * from Account where Id = '{escaped}'"
+        return await self.query_accounts(
+            session,
+            credential,
+            select_sql=query,
+            startposition=1,
+            maxresults=1,
+        )
+
+    async def post(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        *,
+        entity: str,
+        resource: str,
+        payload: dict,
+    ) -> tuple[dict, bool, float, int]:
+        token, refreshed = await self.ensure_valid_access_token(session, credential)
+        url = self._build_entity_url(credential, resource)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        latency_ms = 0.0
+        status_code = 0
+        async with get_async_client(self.settings) as client:
+            start = perf_counter()
+            response = await request_with_retry_and_backoff(
+                client,
+                method="POST",
+                url=url,
+                json=payload,
+                params={"minorversion": self.MINOR_VERSION},
+                headers=headers.copy(),
+                settings=self.settings,
+            )
+            latency_ms = (perf_counter() - start) * 1000
+            status_code = response.status_code
+
+            if response.status_code == 401:
+                self.logger.warning(
+                    "qbo_post_unauthorized",
+                    extra={
+                        "entity": entity,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                refreshed = await self._refresh_credential(session, credential, force=True)
+                headers["Authorization"] = f"Bearer {credential.access_token}"
+                start = perf_counter()
+                response = await request_with_retry_and_backoff(
+                    client,
+                    method="POST",
+                    url=url,
+                    json=payload,
+                    params={"minorversion": self.MINOR_VERSION},
+                    headers=headers.copy(),
+                    settings=self.settings,
+                )
+                latency_ms = (perf_counter() - start) * 1000
+                status_code = response.status_code
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = exc.response.text
+                status_code = exc.response.status_code
+                self.logger.error(
+                    "qbo_post_failed",
+                    extra={
+                        "entity": entity,
+                        "status": status_code,
+                        "body": body,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                raise QuickBooksApiError(
+                    f"QBO post error for {entity}: {status_code} {body}",
+                    status_code=status_code,
+                    body=body,
+                ) from exc
+
+            response_payload = response.json()
+            return response_payload, refreshed, latency_ms, status_code
 
     async def rotate_credential(
         self,
@@ -223,12 +510,28 @@ class QuickBooksService:
         await self._refresh_credential(session, credential, force=True)
 
     def _build_company_info_url(self, credential: ClientCredentials) -> str:
+        base = self._build_company_base_url(credential)
+        return f"{base}/companyinfo/{credential.realm_id}"
+
+    def _build_query_url(self, credential: ClientCredentials) -> str:
+        base = self._build_company_base_url(credential)
+        return f"{base}/query"
+
+    def _build_entity_url(self, credential: ClientCredentials, resource: str) -> str:
+        base = self._build_company_base_url(credential)
+        return f"{base}/{resource}"
+
+    def _build_report_url(self, credential: ClientCredentials, report_name: str) -> str:
+        base = self._build_company_base_url(credential)
+        return f"{base}/reports/{report_name}"
+
+    def _build_company_base_url(self, credential: ClientCredentials) -> str:
         base = (
             self.SANDBOX_API_BASE
             if credential.environment == "sandbox"
             else self.PROD_API_BASE
         )
-        return f"{base}/v3/company/{credential.realm_id}/companyinfo/{credential.realm_id}"
+        return f"{base}/v3/company/{credential.realm_id}"
 
     async def _refresh_credential(
         self,
@@ -283,9 +586,12 @@ class QuickBooksService:
                 "oauth_token_error",
                 extra={
                     "status": response.status_code,
+                    "body": response.text,
                 },
             )
-            raise QuickBooksOAuthError("Failed to obtain tokens from Intuit")
+            raise QuickBooksOAuthError(
+                f"Failed to obtain tokens from Intuit (status {response.status_code}): {response.text}"
+            )
         return response.json()
 
     def _parse_token_response(self, payload: dict, realm_id: str) -> TokenBundle:
@@ -325,3 +631,6 @@ class QuickBooksService:
         credentials = f"{self.settings.qbo_client_id}:{self.settings.qbo_client_secret}"
         encoded = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
         return f"Basic {encoded}"
+
+    def _escape(self, value: str) -> str:
+        return value.replace("'", "''")

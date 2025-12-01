@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b2e9b8de-2ad5-4e0a-94d4-0e8a6401f9cb",
     "name": "QBO Gateway",
-    "description": "Colección Postman para interactuar con el microservicio QBO Gateway (OAuth, CRUD de clientes y proxy companyinfo). Actualiza las variables en la pestaña de colección antes de ejecutar.",
+    "description": "Colecci\u00f3n Postman para interactuar con el microservicio QBO Gateway (OAuth, CRUD de clientes y proxy companyinfo). Actualiza las variables en la pesta\u00f1a de colecci\u00f3n antes de ejecutar.\n\nIncluye proxies AR/AP (colecciones, SalesReceipt cash y Expense cash).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -33,6 +33,47 @@
               }
             }
           ]
+        },
+        {
+          "name": "Auth - Connect (JSON Mode)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/auth/connect?client_id={{client_id}}&env={{environment}}"
+          },
+          "response": [
+            {
+              "name": "201 Idempotent Reuse",
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"client_id\": \"{{client_id}}\",\n  \"realm_id\": \"1234567890\",\n  \"environment\": \"sandbox\",\n  \"fetched_at\": \"2024-11-08T12:00:00Z\",\n  \"latency_ms\": 742.82,\n  \"data\": {\n    \"Purchase\": {\n      \"Id\": \"123\",\n      \"SyncToken\": \"0\",\n      \"TxnStatus\": \"Completed\"\n    }\n  },\n  \"refreshed\": false,\n  \"idempotent_reuse\": true\n}"
+            }
+          ]
+        },
+        {
+          "name": "Auth - Callback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/auth/callback?code={{oauth_code}}&state={{oauth_state}}&realmId={{realm_id}}"
+          },
+          "response": []
         }
       ]
     },
@@ -80,9 +121,73 @@
           "response": []
         },
         {
+          "name": "Clients - List (summary)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/clients?summary=1"
+          },
+          "response": []
+        },
+        {
+          "name": "Clients - List (summary, env)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/clients?summary=1&env={{environment}}"
+          },
+          "response": []
+        },
+        {
           "name": "Clients - Detail",
           "request": {
             "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/clients/{{client_id}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Clients - Update",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"ACME\",\n  \"status\": \"active\",\n  \"metadata\": {\n    \"tier\": \"production\"\n  }\n}"
+            },
+            "url": "{{base_url}}/clients/{{client_id}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Clients - Delete",
+          "request": {
+            "method": "DELETE",
             "header": [
               {
                 "key": "X-API-Key",
@@ -139,6 +244,475 @@
             "url": "{{base_url}}/qbo/{{client_id}}/companyinfo?environment={{environment}}"
           },
           "response": []
+        },
+        {
+          "name": "QBO - Customers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/customers?environment={{environment}}&status=active&maxresults=50"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Items",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/items?environment={{environment}}&status=active&maxresults=50"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Accounts (List)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/accounts?environment={{environment}}&account_type={{account_type}}&classification={{account_classification}}&active=true&maxresults=50"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Account Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/accounts/{{account_name}}?environment={{environment}}"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Invoices",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/invoices?environment={{environment}}&customer_ref={{customer_name}}&date_from=2024-01-01&date_to=2024-12-31&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Payments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/payments?environment={{environment}}&customer_ref={{customer_name}}&updated_since={{updated_since}}&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - SalesReceipts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/salesreceipts?environment={{environment}}&customer_ref={{customer_name}}&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Expenses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/expenses?environment={{environment}}&vendor_ref={{vendor_name}}&date_from=2024-01-01&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/bills?environment={{environment}}&vendor_ref={{vendor_name}}&status=open&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - BillPayments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/billpayments?environment={{environment}}&vendor_ref={{vendor_name}}&date_from=2024-01-01&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - SalesReceipt (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{$isoTimestamp}}\",\n  \"doc_number\": \"AR-{{$randomInt}}\",\n  \"customer\": \"{{customer_name}}\",\n  \"private_note\": \"Floor display refresh\",\n  \"lines\": [\n    {\n      \"amount\": 1500,\n      \"account_or_item\": \"Installation\",\n      \"description\": \"Store setup\",\n      \"class\": \"North America\"\n    },\n    {\n      \"amount\": 250,\n      \"account_or_item\": \"Travel Rebill\",\n      \"description\": \"Mileage\"\n    }\n  ]\n}"
+            },
+            "url": "{{base_url}}/qbo/{{client_id}}/salesreceipts?environment={{environment}}&auto_create=true"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Expense (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{$isoTimestamp}}\",\n  \"doc_number\": \"AP-{{$randomInt}}\",\n  \"vendor\": \"{{vendor_name}}\",\n  \"bank_account\": \"{{bank_account_name}}\",\n  \"private_note\": \"Freight inbound\",\n  \"lines\": [\n    {\n      \"amount\": 575.5,\n      \"expense_account\": \"{{expense_account_name}}\",\n      \"description\": \"Containers\",\n      \"class\": \"Imports\"\n    }\n  ]\n}"
+            },
+            "url": "{{base_url}}/qbo/{{client_id}}/expenses?environment={{environment}}&auto_create=true"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Vendors",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/vendors?environment={{environment}}&vendor_ref={{vendor_name}}&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Deposits",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/deposits?environment={{environment}}&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Invoice (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/invoices?environment={{environment}}&auto_create=true",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{$isoTimestamp}}\",\n  \"doc_number\": \"INV-{{$randomInt}}\",\n  \"txn_id\": \"{{$guid}}\",\n  \"customer\": \"{{customer_name}}\",\n  \"private_note\": \"On-site services\",\n  \"class\": \"North America\",\n  \"lines\": [\n    {\n      \"amount\": 1200,\n      \"account_or_item\": \"Implementation\",\n      \"description\": \"Kickoff\",\n      \"class\": \"Enterprise\"\n    }\n  ]\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Bill (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/bills?environment={{environment}}&auto_create=true",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{$isoTimestamp}}\",\n  \"doc_number\": \"BILL-{{$randomInt}}\",\n  \"vendor\": \"{{vendor_name}}\",\n  \"private_note\": \"Marketing materials\",\n  \"lines\": [\n    {\n      \"amount\": 475,\n      \"account_or_item\": \"Printing\",\n      \"description\": \"Brochures\"\n    }\n  ]\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Deposit (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/deposits?environment={{environment}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2024-01-05\",\n  \"deposit_to_account\": \"{{deposit_account_name}}\",\n  \"doc_number\": \"DEP-1001\",\n  \"private_note\": \"Weekly receipts\",\n  \"lines\": [\n    {\n      \"amount\": 500.25,\n      \"account_or_item\": \"{{income_account_name}}\",\n      \"description\": \"Card batch\",\n      \"entity_name\": \"Acme Retail\",\n      \"entity_type\": \"Customer\"\n    },\n    {\n      \"amount\": 125.75,\n      \"account_or_item\": \"{{income_account_name}}\",\n      \"description\": \"Cash sales\"\n    }\n  ]\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Payment (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/payments?environment={{environment}}&auto_create=true",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{isoDate}}\",\n  \"doc_number\": \"PAY-{{randomInt}}\",\n  \"customer\": \"{{customer_name}}\",\n  \"deposit_to_account\": \"{{deposit_account_name}}\",\n  \"lines\": [\n    {\n      \"amount\": 1200,\n      \"account_or_item\": \"{{invoice_id}}\",\n      \"linked_doc\": \"{{invoice_id}}\",\n      \"description\": \"Apply to invoice\"\n    }\n  ]\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - BillPayment (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/billpayments?environment={{environment}}&auto_create=true",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"{{isoDate}}\",\n  \"doc_number\": \"BP-{{randomInt}}\",\n  \"vendor\": \"{{vendor_name}}\",\n  \"bank_account\": \"{{bank_account_name}}\",\n  \"ap_account\": \"{{ap_account_name}}\",\n  \"payment_type\": \"Check\",\n  \"lines\": [\n    {\n      \"amount\": 475,\n      \"account_or_item\": \"{{bill_id}}\",\n      \"linked_doc\": \"{{bill_id}}\",\n      \"description\": \"Pay bill\"\n    }\n  ]\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Customer (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/customers?environment={{environment}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"{{$randomCompanyName}}\",\n  \"email\": \"finance+{{$randomInt}}@example.com\",\n  \"phone\": \"+1-{{$randomInt}}\",\n  \"address\": {\n    \"line1\": \"100 Main St\",\n    \"city\": \"Austin\",\n    \"state\": \"TX\",\n    \"postal_code\": \"78701\",\n    \"country\": \"USA\"\n  }\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Vendor (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/vendors?environment={{environment}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"{{$randomCompanyName}} Logistics\",\n  \"email\": \"ap+{{$randomInt}}@example.com\",\n  \"phone\": \"+52-{{$randomInt}}\",\n  \"address\": {\n    \"line1\": \"Ave. Reforma 100\",\n    \"city\": \"CDMX\",\n    \"state\": \"CDMX\",\n    \"postal_code\": \"01234\",\n    \"country\": \"Mexico\"\n  }\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Item (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/items?environment={{environment}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Implementation\",\n  \"type\": \"Service\",\n  \"income_account\": \"{{income_account_name}}\",\n  \"expense_account\": \"{{expense_account_name}}\",\n  \"description\": \"Field services\",\n  \"sku\": \"SRV-1001\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Account (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/accounts/{{account_id}}?environment={{environment}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Renamed Account\",\n  \"account_number\": \"6100-1\",\n  \"description\": \"Updated via API\",\n  \"active\": false,\n  \"parent_account\": \"{{parent_account_name}}\"\n}"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health - Check",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/health"
+          },
+          "response": []
         }
       ]
     }
@@ -159,6 +733,78 @@
     {
       "key": "environment",
       "value": "sandbox"
+    },
+    {
+      "key": "oauth_code",
+      "value": ""
+    },
+    {
+      "key": "oauth_state",
+      "value": ""
+    },
+    {
+      "key": "realm_id",
+      "value": ""
+    },
+    {
+      "key": "customer_name",
+      "value": "Acme Retail"
+    },
+    {
+      "key": "vendor_name",
+      "value": "Logistica MX"
+    },
+    {
+      "key": "bank_account_name",
+      "value": "Checking"
+    },
+    {
+      "key": "expense_account_name",
+      "value": "Freight In"
+    },
+    {
+      "key": "updated_since",
+      "value": "2024-01-01T00:00:00Z"
+    },
+    {
+      "key": "deposit_account_name",
+      "value": "Checking"
+    },
+    {
+      "key": "ar_account_name",
+      "value": "Accounts Receivable (A/R)"
+    },
+    {
+      "key": "ap_account_name",
+      "value": "Accounts Payable (A/P)"
+    },
+    {
+      "key": "income_account_name",
+      "value": "Sales of Product Income"
+    },
+    {
+      "key": "asset_account_name",
+      "value": "Inventory Asset"
+    },
+    {
+      "key": "account_id",
+      "value": "35"
+    },
+    {
+      "key": "account_name",
+      "value": "Bank:Checking"
+    },
+    {
+      "key": "parent_account_name",
+      "value": "Operating Expenses"
+    },
+    {
+      "key": "account_type",
+      "value": "Bank"
+    },
+    {
+      "key": "account_classification",
+      "value": "Asset"
     }
   ]
 }

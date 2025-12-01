@@ -104,6 +104,12 @@ class ClientCredentials(Base):
         UniqueConstraint("realm_id", "environment", name="uq_realm_environment"),
         Index("ix_client_credentials_client_id", "client_id"),
         Index("ix_client_credentials_realm_id", "realm_id"),
+        Index(
+            "ix_client_credentials_client_env_access_exp",
+            "client_id",
+            "environment",
+            "access_expires_at",
+        ),
     )
 
     client_id: Mapped[uuid.UUID] = mapped_column(
@@ -146,10 +152,10 @@ class IdempotencyKeys(Base):
         Index("ix_idempotency_keys_client_id", "client_id"),
     )
 
-    client_id: Mapped[uuid.UUID] = mapped_column(
+    client_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         GUID(),
         ForeignKey("clients.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     key: Mapped[str] = mapped_column(String(255), nullable=False)
     resource_type: Mapped[str] = mapped_column(String(64), nullable=False)

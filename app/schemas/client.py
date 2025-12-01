@@ -4,17 +4,21 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 ClientStatus = Literal["active", "inactive"]
 Environment = Literal["sandbox", "prod"]
+AccessStatus = Literal["valid", "expired", "none"]
 
 
 class ClientBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     status: ClientStatus = "active"
-    metadata: Optional[dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("metadata_json", "metadata"),
+    )
 
 
 class ClientCreate(ClientBase):
@@ -53,6 +57,21 @@ class CredentialSummary(BaseModel):
 
 class ClientWithCredentials(ClientRead):
     credentials: list[CredentialSummary] = []
+
+
+class ClientListItemSummary(ClientRead):
+    has_credentials: bool
+    environments: list[str] = Field(
+        default_factory=list,
+        description="Environments with stored credentials (deduplicated and sorted).",
+    )
+    access_status: AccessStatus = Field(
+        description="Overall access token health based on latest expiration.",
+    )
+    access_expires_at: Optional[datetime] = Field(
+        default=None,
+        description="Latest access token expiration considered in the summary.",
+    )
 
 
 class CredentialRotateResponse(BaseModel):

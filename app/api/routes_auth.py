@@ -4,8 +4,8 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import logging as logging_utils
@@ -19,12 +19,42 @@ from app.utils.validators import parse_uuid, resolve_environment
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+public_router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger("app.api.auth")
 
 
-@router.get("/connect", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+@router.get(
+    "/connect",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    summary="Start QBO OAuth (redirect or JSON)",
+    description=(
+        "Initiates the QuickBooks OAuth redirect. If the request includes `Accept: application/json`, "
+        "returns a JSON body with the redirect URL instead of issuing an HTTP redirect. "
+        "Otherwise responds with a 307 Temporary Redirect to Intuit."
+    ),
+    responses={
+        status.HTTP_200_OK: {
+            "description": "Redirect URL returned in JSON when requesting application/json",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "client_id": "uuid",
+                        "environment": "sandbox",
+                        "redirect_url": "https://appcenter.intuit.com/connect/oauth2?...",
+                        "message": "Open this URL in a browser to complete OAuth login.",
+                        "request_id": "optional-request-id",
+                    }
+                }
+            },
+        },
+        status.HTTP_307_TEMPORARY_REDIRECT: {
+            "description": "Legacy redirect response with Location header to Intuit OAuth",
+        },
+    },
+)
 async def connect_oauth(
     client_id: str,
+    request: Request,
     env: str = Query(default="sandbox"),
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_session),
@@ -53,10 +83,27 @@ async def connect_oauth(
         "oauth_connect_redirect",
         extra={"client_id": str(client_uuid), "environment": environment},
     )
+
+    accept_header = request.headers.get("accept", "")
+    if "application/json" in accept_header.lower():
+        request_id = getattr(request.state, "request_id", None)
+        payload = {
+            "client_id": str(client_uuid),
+            "environment": environment,
+            "redirect_url": auth_url,
+            "message": "Open this URL in a browser to complete OAuth login.",
+        }
+        if request_id:
+            payload["request_id"] = request_id
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=payload,
+        )
+
     return RedirectResponse(auth_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
-@router.get("/callback")
+@public_router.get("/callback")
 async def oauth_callback(
     code: Optional[str] = Query(default=None),
     state: Optional[str] = Query(default=None),
