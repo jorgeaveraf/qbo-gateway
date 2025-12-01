@@ -139,6 +139,8 @@ For Docker environments, run commands inside the `api` container.
 | `GET /clients/{id}/credentials` | Shows expiration info (not tokens). | `X-API-Key` |
 | `POST /clients/{id}/credentials/rotate` | Forces token refresh. | `X-API-Key` |
 | `GET /qbo/{id}/companyinfo` | Proxy to Intuit with auto-refresh. | `X-API-Key` |
+| `GET /qbo/{id}/reports/ar-aging-summary` | Aged Receivables summary report proxy. | `X-API-Key` |
+| `GET /qbo/{id}/reports/ap-aging-summary` | Aged Payables summary report proxy. | `X-API-Key` |
 | `GET /qbo/{id}/customers` | Paginated Customer list (filters + `next_startposition`). | `X-API-Key` |
 | `GET /qbo/{id}/vendors` | Paginated Vendor list. | `X-API-Key` |
 | `GET /qbo/{id}/items` | Paginated Item list. | `X-API-Key` |
@@ -186,6 +188,29 @@ Responses are normalized as:
 ```
 
 Use `next_startposition` to continue pagination until it returns `null`.
+
+### Reports (aging)
+
+- `GET /qbo/{client_id}/reports/ar-aging-summary` and `/ap-aging-summary` proxy the QuickBooks `AgedReceivables` and `AgedPayables` reports.
+- Query params: `report_date` (ISO) or `date_macro`, plus optional `aging_period` and `num_periods`; `environment` can override the stored client environment.
+- Response envelope matches other proxies and includes `data`, `latency_ms`, and `refreshed` metadata alongside the client/realm identifiers.
+
+POST proxies (`/qbo/{client_id}/salesreceipts`, `/expenses`, `/deposits`, `/invoices`, `/bills`, `/payments`, `/billpayments`, `/items`, `/customers`, `/vendors`) return:
+
+```json
+{
+  "client_id": "...",
+  "realm_id": "...",
+  "environment": "sandbox",
+  "fetched_at": "2024-11-08T12:00:00Z",
+  "latency_ms": 742.82,
+  "data": { "...": "QuickBooks entity JSON" },
+  "refreshed": false,
+  "idempotent_reuse": true
+}
+```
+
+`idempotent_reuse` is `true` when the response came from a prior idempotent POST attempt (same Idempotency-Key); otherwise it is `false`.
 
 #### Cash SalesReceipt (AR) payload
 
@@ -343,48 +368,30 @@ Import into Postman, update the variables, and reuse the same `Idempotency-Key` 
 5. Extend the API with optional attachments (PDF/XML) by using the QBO Upload API, so invoices and bills can include supporting documents.
 ## Reference Resolution & Auto-Create (Design Notes)
 
-- `QBOReferenceResolver` centraliza los lookups con caché en memoria. Las búsquedas usan `select * from <Entity> where ... startposition=1 maxresults=1`. Errores de OAuth o API devuelven HTTP 502.
-- `resolve_customer` / `resolve_vendor`: `UPPER(DisplayName) = '<identifier>'`; si `auto_create` se envía `POST /customer` o `POST /vendor` con `DisplayName`.
-- `resolve_account`: `UPPER(Name) = '<identifier>'`; si se pasa `account_type`, agrega `AccountType = '<type>'`. No usa `FullyQualifiedName` ni reintenta sin tipo. Activos e inactivos se incluyen (no hay filtro `Active`).
-- `ensure_account`: intenta `resolve_account` y si 404 + `auto_create`, llama a `_create_account` con `Name` saneado (reemplaza `:` por espacio, elimina tabs/newlines) y opcionalmente `AccountType` + `AccountSubType`.
-- `resolve_item`: `FullyQualifiedName` case-sensitive (QuickBooks rechaza `UPPER()` para Item). `resolve_class` usa `FullyQualifiedName` case-sensitive. `resolve_entity_with_auto_create` solo auto-crea Customer/Vendor.
-- `_execute_qbo_post` maneja idempotencia y logging; los handlers construyen payloads con refs resueltas antes de llegar aquí.
+- `QBOReferenceResolver` centralizes lookups with an in-memory cache. Queries use `select * from <Entity> where ... startposition=1 maxresults=1`; OAuth/API errors become HTTP 502.
+- Accounts now understand both `Name` and `FullyQualifiedName` without using SQL functions like `UPPER()` (to avoid QBO parse errors):
+  - Identifiers with `:` are treated as FullyQualifiedName first (exact match, no `AccountType` filter). If not found, the leaf name (after the last `:`) is queried with the provided `AccountType`, and then again without it.
+  - Identifiers without `:` use `AccountType = '<type>' AND Name = '<identifier>'` first; if nothing matches and a type was requested, we retry without `AccountType`. Active/inactive accounts are both eligible.
+  - When the resolved account type differs from the requested one, we log a warning and still reuse the account.
+- `ensure_account` runs the sequence above with `AccountType` and then without it; only if nothing is found and `auto_create=true` it calls `_create_account`. Endpoints that previously did lookups only keep that behavior (no new auto-create paths).
+- `_create_account` preserves hierarchy and names: if the identifier looks like `Parent:Child`, it sets `ParentRef` to `Parent` (when resolvable) and `Name` to `Child`, stripping only control characters. Logs include the original identifier, the payload name, and the requested `AccountType`/`AccountSubType`.
+- On QuickBooks error `6240 Duplicate Name Exists Error`, `_create_account` performs a fresh lookup using the original identifier/payload name without forcing `AccountType`; if the account exists, we reuse it and log `account_duplicate_reused` instead of bubbling a 502. Only if the account is still not found do we propagate the error.
+- `resolve_item` / `resolve_class` remain case-sensitive on `FullyQualifiedName` (QBO rejects `UPPER()`), and `resolve_entity_with_auto_create` still only auto-creates customers/vendors.
 
-### Por qué aparece `6240 Duplicate Name Exists Error` al crear Accounts
+### Current POST behavior
 
-- En Expenses con `auto_create=true` (o sandbox), cada línea hace: `resolve_account(line.expense_account)` (Name exacta); si 404, `ensure_account` con `AccountType='Expense'` y `AccountSubType='OfficeGeneralAdministrativeExpenses'`. El Name enviado al POST se sanea.
-- Si se envía un FullyQualifiedName (ej. `Delivery COGS:Labor Cost`), el lookup usa `Name` en vez de `FullyQualifiedName`; la cuenta real puede existir como subcuenta (`Name='Labor Cost'`, `FullyQualifiedName='Delivery COGS:Labor Cost'`) o con otro `AccountType` (p.ej. `Cost of Goods Sold`). El filtro `AccountType='Expense'` impide verla.
-- Tras no encontrar nada, `_create_account` intenta crear `Name='Delivery COGS Labor Cost'` (dos diferencias: saneo y `AccountType=Expense`). QuickBooks responde 6240 porque ya existe una cuenta con ese display name/FullyQualifiedName bajo otro tipo o jerarquía.
-- Filtros que pueden ocultar la cuenta antes de auto-crear: `AccountType` distinto, uso de `Name` (no `FullyQualifiedName`), subcuentas donde el nombre del hijo no incluye al padre, y posibles cuentas inactivas con otro tipo que no coinciden con el filtro de tipo.
-
-### Resumen por endpoint (POST)
-
-| Endpoint | Resolución de referencias | Auto-create | Consultas típicas |
-|----------|--------------------------|-------------|-------------------|
-| `/qbo/{id}/expenses` | Vendor (`DisplayName`), Bank Account `AccountType=Bank`, líneas: Account (Name) o auto-create Expense | Vendor auto-create si `auto_create`/sandbox; Bank auto-create; líneas crean Expense account si 404 | Accounts: `select * from Account where AccountType='Expense' AND UPPER(Name)=...` al auto-crear |
-| `/qbo/{id}/deposits` | DepositToAccount `AccountType=Bank`; líneas: Account (Name) o Item income account; optional Entity (Customer/Vendor/Employee/Other), Class | Auto-create Bank acct e Income acct si `auto_create`/sandbox; Entity auto-create solo Customer/Vendor | Accounts: `select * from Account where AccountType='Bank' AND UPPER(Name)=...`; Income auto-create: `AccountType='Income'` |
-| `/qbo/{id}/invoices` | Customer, líneas: Item (FullyQualifiedName) o Account (Name), Class | Sin auto-create de cuentas; Customer auto-create si `auto_create` | Accounts: `select * from Account where UPPER(Name)=...` |
-| `/qbo/{id}/salesreceipts` | Igual que invoices | Igual | Igual |
-| `/qbo/{id}/bills` | Vendor, líneas: Item o Account (Name), Class | Sin auto-create | Igual |
-| `/qbo/{id}/payments` | Customer; optional DepositToAccount/ARAccount (Name) | Sin auto-create | Igual |
-| `/qbo/{id}/billpayments` | Vendor; bank/cc account (Name) con `AccountType=Bank|Credit Card`; optional APAccount | Sin auto-create | Accounts con filtro `AccountType` según `payment_type` |
-| `/qbo/{id}/items` | IncomeAccount, optional Expense/Asset accounts (Name) | Sin auto-create | Igual |
-| `/qbo/{id}/customers` | N/A (directo a POST) | N/A | N/A |
-| `/qbo/{id}/vendors` | N/A (directo a POST) | N/A | N/A |
-
-### Posibles inconsistencias
-
-- Solo Expenses y Deposits auto-crean cuentas; el resto falla en 404 sin reintentos más laxos.
-- Cuando se fuerza `AccountType` (Bank/Income/Expense) en `ensure_account`, no hay reintento sin tipo, de modo que una cuenta existente con otro tipo no se reutiliza y puede terminar en 6240.
-- Los lookups de Account usan `Name`, no `FullyQualifiedName`; depósitos/bills/invoices no encuentran subcuentas si se envía el FQN.
-- `auto_create` se extiende implícitamente a sandbox para Expenses/Deposits, pero no para otros endpoints.
-
-### Candidate changes (no implementados aún)
-
-- Si el identificador contiene `:` o falla con 6240, reintentar lookup por `FullyQualifiedName` y sin `AccountType`, reutilizando la cuenta existente.
-- En `_create_account`, mapear `ParentRef` cuando se reciba un FQN (`A:B` → parent `A`, name `B`) para evitar nuevos nombres saneados.
-- Normalizar la búsqueda de Accounts para que primero use `Name`, luego `FullyQualifiedName`, y solo después aplique `AccountType` como filtro secundario.
-- Unificar la semántica de `auto_create` (decidir si sandbox siempre auto-crea o respetar el flag en todos los endpoints) y documentarlo en la API pública.
+| Endpoint | Reference resolution | Auto-create | Notes |
+|----------|---------------------|-------------|-------|
+| `/qbo/{id}/expenses` | Vendor (`DisplayName`), Bank `AccountType=Bank`, lines resolve Account with FQN-aware lookup (falls back without type) | Vendor + Bank auto-create if `auto_create=true` or sandbox; line accounts auto-create as `Expense` if 404 + `auto_create` | `ensure_account` now reuses existing accounts (including subaccounts) before creating |
+| `/qbo/{id}/deposits` | DepositToAccount `AccountType=Bank`; lines: Account (FQN-aware) or Item income account; optional Entity/Class | Bank + Income accounts auto-create if `auto_create=true` or sandbox; Entity auto-create only for Customer/Vendor | Account lookups retry without type and honor `FullyQualifiedName` |
+| `/qbo/{id}/invoices` | Customer; lines: Item (FullyQualifiedName) or Account (FQN-aware), Class | Accounts are looked up only | More resilient account reuse (no auto-create) |
+| `/qbo/{id}/salesreceipts` | Same as invoices | Same | Same |
+| `/qbo/{id}/bills` | Vendor; lines: Item or Account (FQN-aware), Class | Accounts are looked up only | Same |
+| `/qbo/{id}/payments` | Customer; optional DepositToAccount/ARAccount (FQN-aware) | Accounts are looked up only | Same |
+| `/qbo/{id}/billpayments` | Vendor; Bank/CC account (`AccountType=Bank|Credit Card`), optional APAccount (FQN-aware) | Accounts are looked up only | Same |
+| `/qbo/{id}/items` | IncomeAccount + optional Expense/Asset accounts (FQN-aware) | Accounts are looked up only | Item/Class resolution unchanged |
+| `/qbo/{id}/customers` | Direct POST | N/A | Direct entity creation |
+| `/qbo/{id}/vendors` | Direct POST | N/A | Direct entity creation |
 
 # Annex A — ETL to Deposit Mapping
 

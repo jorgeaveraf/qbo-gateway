@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
+from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -217,6 +218,85 @@ class QuickBooksService:
                     f"QBO API error: {exc.response.status_code}",
                     status_code=exc.response.status_code,
                     body=exc.response.text,
+                ) from exc
+
+            payload = response.json()
+            return payload, refreshed, latency_ms
+
+    async def fetch_report(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        *,
+        report_name: str,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[dict, bool, float]:
+        token, refreshed = await self.ensure_valid_access_token(session, credential)
+        url = self._build_report_url(credential, report_name)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        request_params = {"minorversion": self.MINOR_VERSION}
+        if params:
+            request_params.update({key: value for key, value in params.items() if value is not None})
+
+        latency_ms = 0.0
+        async with get_async_client(self.settings) as client:
+            start = perf_counter()
+            response = await request_with_retry_and_backoff(
+                client,
+                method="GET",
+                url=url,
+                params=request_params,
+                headers=headers.copy(),
+                settings=self.settings,
+            )
+            latency_ms = (perf_counter() - start) * 1000
+
+            if response.status_code == 401:
+                self.logger.warning(
+                    "qbo_report_unauthorized",
+                    extra={
+                        "report": report_name,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                refreshed = await self._refresh_credential(session, credential, force=True)
+                headers["Authorization"] = f"Bearer {credential.access_token}"
+                start = perf_counter()
+                response = await request_with_retry_and_backoff(
+                    client,
+                    method="GET",
+                    url=url,
+                    params=request_params,
+                    headers=headers.copy(),
+                    settings=self.settings,
+                )
+                latency_ms = (perf_counter() - start) * 1000
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = exc.response.text
+                status_code = exc.response.status_code
+                self.logger.error(
+                    "qbo_report_failed",
+                    extra={
+                        "report": report_name,
+                        "status": status_code,
+                        "body": body,
+                        "client_id": str(credential.client_id),
+                        "realm_id": credential.realm_id,
+                        "environment": credential.environment,
+                    },
+                )
+                raise QuickBooksApiError(
+                    f"QBO report error for {report_name}: {status_code} {body}",
+                    status_code=status_code,
+                    body=body,
                 ) from exc
 
             payload = response.json()
@@ -440,6 +520,10 @@ class QuickBooksService:
     def _build_entity_url(self, credential: ClientCredentials, resource: str) -> str:
         base = self._build_company_base_url(credential)
         return f"{base}/{resource}"
+
+    def _build_report_url(self, credential: ClientCredentials, report_name: str) -> str:
+        base = self._build_company_base_url(credential)
+        return f"{base}/reports/{report_name}"
 
     def _build_company_base_url(self, credential: ClientCredentials) -> str:
         base = (
