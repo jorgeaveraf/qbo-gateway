@@ -414,6 +414,34 @@
           "response": []
         },
         {
+          "name": "QBO - Customer Balance Detailed (Report)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/reports/customer-balance-detailed?environment={{environment}}"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - Vendor Balance Detailed (Report)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/reports/vendor-balance-detailed?environment={{environment}}"
+          },
+          "response": []
+        },
+        {
           "name": "QBO - SalesReceipt (POST)",
           "request": {
             "method": "POST",
