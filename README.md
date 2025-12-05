@@ -141,6 +141,8 @@ For Docker environments, run commands inside the `api` container.
 | `GET /qbo/{id}/companyinfo` | Proxy to Intuit with auto-refresh. | `X-API-Key` |
 | `GET /qbo/{id}/reports/ar-aging-summary` | Aged Receivables summary report proxy. | `X-API-Key` |
 | `GET /qbo/{id}/reports/ap-aging-summary` | Aged Payables summary report proxy. | `X-API-Key` |
+| `GET /qbo/{id}/reports/customer-balance-detailed` | CustomerBalanceDetail report proxy. | `X-API-Key` |
+| `GET /qbo/{id}/reports/vendor-balance-detailed` | VendorBalanceDetail report proxy. | `X-API-Key` |
 | `GET /qbo/{id}/customers` | Paginated Customer list (filters + `next_startposition`). | `X-API-Key` |
 | `GET /qbo/{id}/vendors` | Paginated Vendor list. | `X-API-Key` |
 | `GET /qbo/{id}/items` | Paginated Item list. | `X-API-Key` |
@@ -194,6 +196,12 @@ Use `next_startposition` to continue pagination until it returns `null`.
 - `GET /qbo/{client_id}/reports/ar-aging-summary` and `/ap-aging-summary` proxy the QuickBooks `AgedReceivables` and `AgedPayables` reports.
 - Query params: `report_date` (ISO) or `date_macro`, plus optional `aging_period` and `num_periods`; `environment` can override the stored client environment.
 - Response envelope matches other proxies and includes `data`, `latency_ms`, and `refreshed` metadata alongside the client/realm identifiers.
+
+### Customer/Vendor balance detailed reports
+
+- `GET /qbo/{client_id}/reports/customer-balance-detailed` and `/vendor-balance-detailed` proxy the QuickBooks `CustomerBalanceDetail` and `VendorBalanceDetail` reports.
+- Query params: `report_date` (ISO) or `date_macro`, plus optional `aging_period`/`num_periods` and `environment` overrides, matching the aging report behaviour.
+- Response envelope uses the standard `QBOProxyResponse` shape so downstream consumers receive the raw QuickBooks report JSON with latency/refresh metadata.
 
 POST proxies (`/qbo/{client_id}/salesreceipts`, `/expenses`, `/deposits`, `/invoices`, `/bills`, `/payments`, `/billpayments`, `/items`, `/customers`, `/vendors`) return:
 

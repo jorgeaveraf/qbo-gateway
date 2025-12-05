@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,6 +89,56 @@ async def get_ap_aging_summary(
     )
 
 
+@router.get(
+    "/customer-balance-detailed",
+    response_model=QBOProxyResponse,
+    response_model_exclude_none=True,
+    summary="Customer Balance Detailed",
+    description="Proxies the QuickBooks CustomerBalanceDetail report for the given client.",
+)
+async def get_customer_balance_detailed(
+    client_id: str,
+    params: ReportQueryParams = Depends(get_report_query_params),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> QBOProxyResponse:
+    qbo_service = QuickBooksService(settings)
+    return await _fetch_report(
+        report_name="CustomerBalanceDetail",
+        client_id=client_id,
+        params=params,
+        session=session,
+        settings=settings,
+        qbo_service=qbo_service,
+        report_fetcher=qbo_service.fetch_customer_balance_detail,
+    )
+
+
+@router.get(
+    "/vendor-balance-detailed",
+    response_model=QBOProxyResponse,
+    response_model_exclude_none=True,
+    summary="Vendor Balance Detailed",
+    description="Proxies the QuickBooks VendorBalanceDetail report for the given client.",
+)
+async def get_vendor_balance_detailed(
+    client_id: str,
+    params: ReportQueryParams = Depends(get_report_query_params),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> QBOProxyResponse:
+    qbo_service = QuickBooksService(settings)
+    return await _fetch_report(
+        report_name="VendorBalanceDetail",
+        client_id=client_id,
+        params=params,
+        session=session,
+        settings=settings,
+        qbo_service=qbo_service,
+        report_fetcher=qbo_service.fetch_vendor_balance_detail,
+    )
+
+
 async def _fetch_report(
     *,
     report_name: str,
@@ -96,19 +146,24 @@ async def _fetch_report(
     params: ReportQueryParams,
     session: AsyncSession,
     settings: Settings,
+    qbo_service: QuickBooksService | None = None,
+    report_fetcher: Callable[..., Awaitable[tuple[dict[str, Any], bool, float]]] | None = None,
 ) -> QBOProxyResponse:
     report_params = _build_report_params(params)
     client_uuid, env, credential = await _get_client_context(client_id, params.environment, session, settings)
     client_id_str = str(client_uuid)
-    qbo_service = QuickBooksService(settings)
+    qbo_service = qbo_service or QuickBooksService(settings)
+    fetcher = report_fetcher or (
+        lambda sess, cred, *, params: qbo_service.fetch_report(
+            sess,
+            cred,
+            report_name=report_name,
+            params=params,
+        )
+    )
 
     try:
-        payload, refreshed, latency_ms = await qbo_service.fetch_report(
-            session,
-            credential,
-            report_name=report_name,
-            params=report_params,
-        )
+        payload, refreshed, latency_ms = await fetcher(session, credential, params=report_params)
     except QuickBooksApiError as exc:
         logger.error(
             "qbo_report_error",
