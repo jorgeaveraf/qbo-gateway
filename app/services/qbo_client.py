@@ -302,6 +302,34 @@ class QuickBooksService:
             payload = response.json()
             return payload, refreshed, latency_ms
 
+    async def fetch_customer_balance_detail(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[dict, bool, float]:
+        return await self.fetch_report(
+            session,
+            credential,
+            report_name="CustomerBalanceDetail",
+            params=params,
+        )
+
+    async def fetch_vendor_balance_detail(
+        self,
+        session: AsyncSession,
+        credential: ClientCredentials,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[dict, bool, float]:
+        return await self.fetch_report(
+            session,
+            credential,
+            report_name="VendorBalanceDetail",
+            params=params,
+        )
+
     async def query(
         self,
         session: AsyncSession,
