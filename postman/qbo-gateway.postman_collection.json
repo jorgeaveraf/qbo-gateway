@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b2e9b8de-2ad5-4e0a-94d4-0e8a6401f9cb",
     "name": "QBO Gateway",
-    "description": "Colecci\u00f3n Postman para interactuar con el microservicio QBO Gateway (OAuth, CRUD de clientes y proxy companyinfo). Actualiza las variables en la pesta\u00f1a de colecci\u00f3n antes de ejecutar.\n\nIncluye proxies AR/AP (colecciones, SalesReceipt cash y Expense cash).",
+    "description": "Colecci\u00f3n Postman para interactuar con el microservicio QBO Gateway (OAuth, CRUD de clientes, proxies de cat\u00e1logos y reports). Actualiza las variables en la pesta\u00f1a de colecci\u00f3n antes de ejecutar.\n\nIncluye proxies AR/AP (colecciones, SalesReceipt cash y Expense cash) y reports de aging para AR/AP.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -382,6 +382,34 @@
               }
             ],
             "url": "{{base_url}}/qbo/{{client_id}}/billpayments?environment={{environment}}&vendor_ref={{vendor_name}}&date_from=2024-01-01&maxresults=25"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - AR Aging Summary (Report)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/reports/ar-aging-summary?environment={{environment}}"
+          },
+          "response": []
+        },
+        {
+          "name": "QBO - AP Aging Summary (Report)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{api_key}}"
+              }
+            ],
+            "url": "{{base_url}}/qbo/{{client_id}}/reports/ap-aging-summary?environment={{environment}}"
           },
           "response": []
         },
